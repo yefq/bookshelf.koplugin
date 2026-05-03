@@ -27,6 +27,17 @@ Tokens.expanders.filename    = metaToken("filename")
 Tokens.expanders.lang        = metaToken("lang")
 Tokens.expanders.format      = metaToken("format")
 
+local function pct(v) return string.format("%d%%", math.floor((v or 0) * 100 + 0.5)) end
+
+Tokens.expanders.page_num   = function(b) return b and b.page_num and tostring(b.page_num) or "" end
+Tokens.expanders.page_count = function(b) return b and b.page_count and tostring(b.page_count) or "" end
+Tokens.expanders.book_pct       = function(b) return b and b.book_pct and pct(b.book_pct) or "" end
+Tokens.expanders.book_pct_left  = function(b) return b and b.book_pct and pct(1 - b.book_pct) or "" end
+Tokens.expanders.pages_left     = function(b)
+    if not b or not b.page_num or not b.page_count then return "" end
+    return tostring(b.page_count - b.page_num)
+end
+
 -- Match longest token names first so %book_pct_left wins over %book_pct.
 local function compareLengthDesc(a, b) return #a > #b end
 local function tokenNamesByLengthDesc()

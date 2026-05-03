@@ -76,5 +76,22 @@ test("metadata: missing token resolves to empty", function()
     eq(Tokens.expand("%series", b), "")
 end)
 
+test("position: %page_num / %page_count", function()
+    local b = bookFixture(); b.page_num = 142; b.page_count = 688
+    eq(Tokens.expand("%page_num / %page_count", b), "142 / 688")
+end)
+test("position: %book_pct rounds to integer percent", function()
+    local b = bookFixture(); b.book_pct = 0.213
+    eq(Tokens.expand("%book_pct", b), "21%")
+end)
+test("position: %book_pct_left", function()
+    local b = bookFixture(); b.book_pct = 0.213
+    eq(Tokens.expand("%book_pct_left", b), "79%")
+end)
+test("position: %pages_left = page_count - page_num", function()
+    local b = bookFixture(); b.page_num = 142; b.page_count = 688
+    eq(Tokens.expand("%pages_left", b), "546")
+end)
+
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)
