@@ -54,18 +54,19 @@ function SpineWidget:_renderFallback()
     local VerticalGroup = require("ui/widget/verticalgroup")
     local Font = require("ui/font")
     local Blitbuffer = require("ffi/blitbuffer")
-    -- White bar spans the full slot width; the TEXT inside has padding.
-    -- This wraps a (text-width) TextBoxWidget in a FrameContainer with
-    -- horizontal padding equal to text_pad, so the wrapper renders a
-    -- white bar of the full slot width with the title text inset.
-    local text_pad = Size.padding.large
-    local card_w   = self.width
+    -- White bar spans the inner card width (card minus the outer border on
+    -- each side) so it stops at the rounded border instead of overflowing.
+    -- TEXT inside has horizontal padding for breathing room.
+    local Screen = require("device").screen
+    local outer_border = Screen:scaleBySize(1)
+    local text_pad     = Size.padding.large
+    local bar_w        = self.width - outer_border * 2
 
     local function whiteBar(text, face, bold, alignment)
         local box = TextBoxWidget:new{
             text  = text,
             face  = face,
-            width = card_w - text_pad * 2,
+            width = bar_w - text_pad * 2,
             alignment = alignment or "center",
             bold  = bold,
         }
