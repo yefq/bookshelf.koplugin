@@ -186,5 +186,30 @@ test("getSeriesGroups: groups books by series_name, sorts by latest activity", f
 end)
 
 -- ============================================================================
+-- Task 2.5: enrichStats
+-- ============================================================================
+
+test("enrichStats: missing statistics plugin → no-op, no crash", function()
+    package.loaded["readerstatistics"] = nil
+    local b = { filepath = "/x.epub" }
+    Repo.enrichStats(b)
+    -- We just want to confirm it doesn't crash; tokens auto-hide handles empties.
+    assert(b.book_time_left_minutes == nil)
+end)
+
+test("enrichStats: pulls minutes from ReaderStatistics public API", function()
+    package.loaded["readerstatistics"] = {
+        getBookStat = function(_self, fp)
+            return { time_left_minutes = 131, read_time_seconds = 7920, pages_read = 87 }
+        end
+    }
+    local b = { filepath = "/x.epub" }
+    Repo.enrichStats(b)
+    assert(b.book_time_left_minutes == 131)
+    assert(b.book_read_time_seconds == 7920)
+    assert(b.book_pages_read == 87)
+end)
+
+-- ============================================================================
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)

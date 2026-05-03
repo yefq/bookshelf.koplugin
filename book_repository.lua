@@ -209,4 +209,28 @@ function Repo.getSeriesGroups(limit)
     return out
 end
 
+-- ─── enrichStats ─────────────────────────────────────────────────────────────
+-- Mutates `book` in-place with statistics fields from readerstatistics.
+-- Graceful no-op when the statistics plugin is absent or its API method is nil.
+--
+-- CONTRACT: ReaderStatistics:getBookStat(filepath) is the intended public API
+-- boundary for v0.1. As of 2026-05, upstream KOReader does not expose this
+-- exact method — getBookStat() does not exist in the KOReader codebase.
+-- The pcall + nil-guard means we fall through silently and all stat-based
+-- tokens auto-hide via Tokens.isEmpty. When the upstream API stabilises,
+-- update this single function — that's why the boundary is isolated here.
+
+function Repo.enrichStats(book)
+    local ok, stats = pcall(require, "readerstatistics")
+    if not ok or not stats or not stats.getBookStat then return end
+    local s = stats:getBookStat(book.filepath)
+    if not s then return end
+    book.book_time_left_minutes = s.time_left_minutes
+    book.book_read_time_seconds = s.read_time_seconds
+    book.book_pages_read        = s.pages_read
+    book.days_reading_book      = s.days_reading
+    book.pages_per_day          = s.pages_per_day
+    book.speed_pph              = s.speed_pph
+end
+
 return Repo
