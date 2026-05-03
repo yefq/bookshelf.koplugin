@@ -16,6 +16,7 @@ local GestureRange    = require("ui/gesturerange")
 local Size            = require("ui/size")
 local Font            = require("ui/font")
 local SpineWidget     = require("spine_widget")
+local CoverLoader     = require("cover_loader")
 local Tokens          = require("tokens")
 
 local HeroCard = InputContainer:extend{
@@ -67,22 +68,30 @@ end
 
 function HeroCard:_renderFull()
     local cover_h = self.cover_h or self.height
+    -- Hero uses a HIGH-RESOLUTION cover bb fetched fresh from the document,
+    -- not BookInfoManager's downscaled thumbnail. This makes the hero-size
+    -- render a DOWNSCALE in RenderImage:scaleBlitBuffer (clean) instead of
+    -- an UPSCALE (corrupts on Kindle with horizontal-stripe static).
+    -- CoverLoader owns the bb's lifetime — it's reused across rebuilds for
+    -- the same book and freed when a different file becomes the hero. May
+    -- return nil if the document fails to open; SpineWidget then falls back
+    -- to book.cover_bb (which still produces visible-but-corrupted output —
+    -- better than nothing).
+    local hero_bb = self.book.filepath and CoverLoader:get(self.book.filepath) or nil
+
     -- Pass tap/hold callbacks through so the cover area itself opens the book
     -- (otherwise SpineWidget consumes the tap with `return true` even when
     -- its own on_tap is nil, and the HeroCard's outer handler never fires).
     local cover = SpineWidget:new{
         book         = self.book,
+        cover_bb     = hero_bb,    -- high-res override; nil = use book.cover_bb
         width        = self.cover_w,
         height       = cover_h,
         on_tap       = self.on_tap,
         on_hold      = self.on_hold,
-        -- Hero renders the cover at its native bb size (no scaling) and
-        -- centers it. RenderImage:scaleBlitBuffer's output is the suspected
-        -- source of the stripe-corruption seen on Kindle — bypass it for
-        -- the hero, where the cached bb is usually close enough to the
-        -- target size that letterboxing is acceptable.
-        cover_fill   = false,
-        cover_native = true,
+        -- Fill the slot (default). Now safe because the high-res bb is
+        -- larger than the slot, so the stretch becomes a downscale —
+        -- avoids the upscale corruption path even at non-2:3 covers.
     }
 
     -- Single gap value driven by the caller (BookshelfWidget's PAD), so every

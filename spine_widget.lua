@@ -54,20 +54,26 @@ local SpineWidget = InputContainer:extend{
     --   cover_fill   = true (default)  → stretch to fill (object-fit: fill)
     --   cover_native = true            → render bb at its native size,
     --                                   center in the slot (no scaling).
-    --                                   Hero card uses this — bypasses
-    --                                   RenderImage:scaleBlitBuffer entirely
-    --                                   to dodge the stripe-corruption seen
-    --                                   on Kindle when scaling.
+    --                                   Used as a safety fallback when bb
+    --                                   is smaller than the slot — keeps
+    --                                   us out of the upscale path that
+    --                                   corrupts on Kindle.
     --   neither                        → aspect-preserving fit
     --                                   (object-fit: contain, scale_factor=0)
     cover_fill   = true,
     cover_native = false,
+    -- Optional bb override. When set, takes precedence over book.cover_bb
+    -- (but the SpineWidget never frees it — caller owns lifetime). Hero
+    -- card uses this to inject a high-resolution bb so the hero-size
+    -- render is always a downscale.
+    cover_bb     = nil,
 }
 
 function SpineWidget:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    if self.book and self.book.has_cover and self.book.cover_bb then
-        self[1] = self:_renderCover()
+    local effective_bb = self.cover_bb or (self.book and self.book.cover_bb)
+    if self.book and self.book.has_cover and effective_bb then
+        self[1] = self:_renderCover(effective_bb)
     else
         self[1] = self:_renderFallback()
     end
@@ -108,61 +114,40 @@ function SpineWidget:_renderShadowedCard(inner)
     }, card_w, card_h
 end
 
-function SpineWidget:_renderCover()
-    local outer, card_w, card_h = self.width, self.width - SHADOW_OFFSET, self.height - SHADOW_OFFSET
+function SpineWidget:_renderCover(bb)
+    local card_w, card_h = self.width - SHADOW_OFFSET, self.height - SHADOW_OFFSET
+    local bb_w = bb:getWidth()
+    local bb_h = bb:getHeight()
 
-    -- Diagnostic logging — track every cover render so we can correlate
-    -- corruption reports with bb dimensions / type / scaling path.
-    local logger = require("logger")
-    local bb = self.book.cover_bb
-    local bb_w  = bb and bb.getWidth  and bb:getWidth()  or "?"
-    local bb_h  = bb and bb.getHeight and bb:getHeight() or "?"
-    local bb_t  = bb and bb.getType   and bb:getType()   or "?"
-    local bb_s  = bb and bb.stride                       or "?"
-    logger.info(string.format(
-        "[bookshelf] cover render: book=%q slot=%dx%d card=%dx%d bb=%sx%s type=%s stride=%s fill=%s",
-        tostring(self.book.title or self.book.filename or "?"),
-        self.width, self.height, card_w, card_h,
-        tostring(bb_w), tostring(bb_h), tostring(bb_t), tostring(bb_s),
-        tostring(self.cover_fill)
-    ))
+    -- RenderImage:scaleBlitBuffer corrupts on UPSCALE on Kindle (horizontal
+    -- stripe static); downscale is clean. Hero card avoids this by feeding
+    -- a high-resolution bb via cover_bb (see cover_loader.lua). The branch
+    -- below is a safety net for callers that didn't, or for the rare
+    -- publisher cover that's smaller than the slot.
+    local would_upscale = bb_w < card_w or bb_h < card_h
 
-    -- RenderImage:scaleBlitBuffer corrupts upscaled output on Kindle —
-    -- confirmed via diagnostic logs: same bb (284×450) renders cleanly when
-    -- DOWN-scaled to 233×353 (shelf), but corrupts when UP-scaled to ~316×499
-    -- (hero). Never upscale. Three branches:
-    --   1. bb <= card → render at native size, center via CenterContainer
-    --      (no scaling, no overflow because bb fits inside the slot).
-    --   2. cover_fill (shelf) → stretch (always a downscale, since cached
-    --      bb is typically larger than shelf slots).
-    --   3. otherwise → scale_factor = 0 (fit, downscale only).
-    local bb_w  = bb and bb.getWidth  and bb:getWidth()
-    local bb_h  = bb and bb.getHeight and bb:getHeight()
-    local would_upscale = bb_w and bb_h and (bb_w < card_w or bb_h < card_h)
+    -- Disposable: with the cover_bb override the caller (CoverLoader) owns
+    -- the bb's lifetime; with the default path the bb is BookInfoManager's
+    -- fresh-from-zstd copy, safe for ImageWidget to free after scaling.
+    local img_disposable = self.cover_bb == nil
 
     local cover_inner
     if would_upscale then
-        -- Render at native bb size, center inside the card. We OWN A COPY of
-        -- the bb so we don't share lifetime with BookInfoManager's cache —
-        -- the shelf's render path creates a copy implicitly via
-        -- scaleBlitBuffer, but the no-scale path here would otherwise share
-        -- the cache pointer. If that cache evicts/frees while our ImageWidget
-        -- still references it, we read into freed memory → stripe corruption.
-        local bb_copy
-        local ok = pcall(function() bb_copy = self.book.cover_bb:copy() end)
-        if not ok or not bb_copy then bb_copy = self.book.cover_bb end
         cover_inner = CenterContainer:new{
             dimen = Geom:new{ w = card_w, h = card_h },
             ImageWidget:new{
-                image            = bb_copy,
-                image_disposable = bb_copy ~= self.book.cover_bb,
+                image            = bb,
+                image_disposable = img_disposable,
                 scale_factor     = 1,
             },
         }
-        require("logger").info("[bookshelf] hero cover: copied bb (own_copy=" ..
-            tostring(bb_copy ~= self.book.cover_bb) .. ")")
     else
-        local img_args = { image = self.book.cover_bb, width = card_w, height = card_h }
+        local img_args = {
+            image            = bb,
+            image_disposable = img_disposable,
+            width            = card_w,
+            height           = card_h,
+        }
         if not self.cover_fill then
             img_args.scale_factor = 0   -- aspect-preserving downscale
         end
