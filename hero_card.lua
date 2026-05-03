@@ -218,14 +218,14 @@ function HeroCard:_renderFull()
     -- consistently too small, leaving the description widget too tall and
     -- overlapping the progress bar.
     if cleaned_desc then
-        right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.large }
+        right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.default }
         local top_used = 0
         for i = 1, #right_top do
             local g = right_top[i]:getSize()
             top_used = top_used + (g and g.h or 0)
         end
-        local bottom_h = right_bottom:getSize().h
-        local breath   = Size.padding.large   -- visible gap between description and progress bar
+        local bottom_h  = right_bottom:getSize().h
+        local breath    = Size.padding.default   -- small gap between description and progress bar
         local available = cover_h - top_used - bottom_h - breath
         if available > Screen:scaleBySize(40) then
             right_top[#right_top + 1] = TextBoxWidget:new{

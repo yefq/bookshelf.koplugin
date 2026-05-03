@@ -53,20 +53,16 @@ function BookshelfWidget:init()
     -- swipe gestures themselves so this catches all of them. Uses the
     -- DTAP_ZONE_FORWARD / _BACKWARD ratios from KOReader defaults so it
     -- matches the rest of the app's "swipe to page" muscle memory.
+    -- GestureRange.direction is a STRING ("west"/"east"/...), not a set.
+    -- The match check is `self.direction ~= gs.direction` — passing a table
+    -- never equals a string, which is why the previous { west = true }
+    -- attempt produced gestures that never fired.
     self.ges_events = {
         SwipeNextPage = {
-            GestureRange:new{
-                ges = "swipe",
-                range = self.dimen,
-                direction = { west = true },
-            },
+            GestureRange:new{ ges = "swipe", range = self.dimen, direction = "west" },
         },
         SwipePrevPage = {
-            GestureRange:new{
-                ges = "swipe",
-                range = self.dimen,
-                direction = { east = true },
-            },
+            GestureRange:new{ ges = "swipe", range = self.dimen, direction = "east" },
         },
     }
 
@@ -152,7 +148,11 @@ function BookshelfWidget:_rebuild()
     local shelf_h    = math.floor((self.height - reserved_h) / 2)
 
     -- ── Hero card ─────────────────────────────────────────────────────────────
-    local current = Repo.getCurrent()
+    -- Hero shows the user's "selected" book: a previewed shelf book if any,
+    -- otherwise the lastfile-resolved currently-reading book. Tapping the
+    -- hero opens whichever book is shown; tapping a shelf cover sets the
+    -- preview without opening.
+    local current = self._preview_book or Repo.getCurrent()
     if current then Repo.enrichStats(current) end
     -- KOReader doesn't track EPUB page numbers outside an active reader
     -- session — `last_page` and `pages` are nil for cre documents on the
@@ -193,10 +193,11 @@ function BookshelfWidget:_rebuild()
         width    = content_w,
         height   = chip_h,
         on_change = function(key)
-            -- Reset any expanded series, and reset to page 1, when switching chips.
+            -- Reset expanded series, preview, and page when switching chips.
             self._expanded_series = nil
-            self.chip = key
-            self.page = 1
+            self._preview_book    = nil
+            self.chip             = key
+            self.page             = 1
             G_reader_settings:saveSetting("bookshelf_active_chip", key)
             self:_rebuild()
             UIManager:setDirty(self, "ui")
@@ -369,7 +370,7 @@ function BookshelfWidget:_rebuild()
         height         = shelf_h,
         gap            = PAD,
         items          = items_top,
-        on_book_tap    = function(b) bw:_openBook(b) end,
+        on_book_tap    = function(b) bw:_previewBook(b) end,
         on_book_hold   = function(b) bw:_openBookMenu(b) end,
         on_series_tap  = function(s) bw:_expandSeries(s) end,
         on_series_hold = function(s) bw:_openBookMenu(s) end,
@@ -379,7 +380,7 @@ function BookshelfWidget:_rebuild()
         gap            = PAD,
         height         = shelf_h,
         items          = items_bottom,
-        on_book_tap    = function(b) bw:_openBook(b) end,
+        on_book_tap    = function(b) bw:_previewBook(b) end,
         on_book_hold   = function(b) bw:_openBookMenu(b) end,
         on_series_tap  = function(s) bw:_expandSeries(s) end,
         on_series_hold = function(s) bw:_openBookMenu(s) end,
@@ -563,8 +564,24 @@ function BookshelfWidget:_openBook(book)
     -- Returning from a book should land on the chip-level view, not in the
     -- middle of an expanded series.
     self._expanded_series = nil
+    self._preview_book    = nil
     local ReaderUI = require("apps/reader/readerui")
     ReaderUI:showReader(book.filepath)
+end
+
+-- _previewBook(book) — load a shelf book into the hero area as a preview.
+-- The user reads the title/author/description there, then taps the hero
+-- to actually open it. Cleared automatically on chip change; replaced by
+-- another _previewBook call when the user taps a different shelf cover.
+function BookshelfWidget:_previewBook(book)
+    if not book or not book.filepath then return end
+    -- Skip if already previewing this exact book (avoid an unnecessary rebuild).
+    if self._preview_book and self._preview_book.filepath == book.filepath then
+        return
+    end
+    self._preview_book = book
+    self:_rebuild()
+    UIManager:setDirty(self, "ui")
 end
 
 -- Cleanup hook: clears the plugin's tracked widget reference when this
