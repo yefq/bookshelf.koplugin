@@ -1,6 +1,6 @@
 -- bookshelf_widget.lua
--- The top-level home screen widget. Composes TitleBar + HeroCard + ChipStrip
--- + shelf-pair label + two ShelfRows, owns chip-state and refresh.
+-- The top-level home screen widget. Composes HeroCard + ChipStrip
+-- + two ShelfRows + chevron pagination footer. Owns chip-state and refresh.
 --
 local InputContainer  = require("ui/widget/container/inputcontainer")
 local FrameContainer  = require("ui/widget/container/framecontainer")
@@ -14,7 +14,6 @@ local GestureRange    = require("ui/gesturerange")
 local Size            = require("ui/size")
 local Font            = require("ui/font")
 local UIManager       = require("ui/uimanager")
-local TitleBar        = require("ui/widget/titlebar")
 local Blitbuffer      = require("ffi/blitbuffer")
 local Screen          = require("device").screen
 
@@ -175,11 +174,17 @@ function BookshelfWidget:_rebuild()
             if not ok then
                 require("logger").warn("[bookshelf] tree free failed:", err)
             end
-            -- Force a full GC pass so FFI finalizers run on the just-freed
-            -- BBs and Lua tables. Without this, LuaJIT's incremental GC
-            -- falls behind the chip-switch rate and RSS climbs ~5 MiB per
-            -- toggle while bbs sit eligible-but-not-collected.
-            collectgarbage("collect")
+            -- LuaJIT's incremental GC falls behind the chip-switch rate and
+            -- RSS climbs ~5 MiB per toggle while bbs sit eligible-but-not-
+            -- collected. We do incremental "step" work each rebuild (cheap,
+            -- no visible pause) and a full "collect" only every 4th rebuild
+            -- so the user-visible interaction stays snappy.
+            collectgarbage("step", 200)
+            BookshelfWidget._rebuild_count = (BookshelfWidget._rebuild_count or 0) + 1
+            if BookshelfWidget._rebuild_count >= 4 then
+                BookshelfWidget._rebuild_count = 0
+                collectgarbage("collect")
+            end
         end)
     end
 
@@ -260,7 +265,13 @@ function BookshelfWidget:_rebuild()
     -- Pagination: 8 per page (4 covers × 2 shelves). Fetch enough items to
     -- cover all pages, then slice the current window.
     local PAGE_SIZE  = 8
-    local all_items  = self:_fetchChipItems(9999) or {}
+    -- Cap the fetch at a sane upper bound — far below "9999" and well above
+    -- realistic libraries (50 pages × 8 = 400 items). This keeps allocation
+    -- bounded so a degenerate library size can't blow up GC pressure on
+    -- chip switches, while still letting the chevron pagination display
+    -- "Page X of Y" accurately for any reasonable user.
+    local MAX_FETCH  = 400
+    local all_items  = self:_fetchChipItems(MAX_FETCH) or {}
     local total      = #all_items
     local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
     if self.page > total_pages then self.page = total_pages end
@@ -337,110 +348,8 @@ function BookshelfWidget:_rebuild()
         return
     end
 
-    -- ── Bookends-style pagination footer ──────────────────────────────────────
-    -- ⏮  ◀  Page X of Y  ▶  ⏭  with chevron icons. Mirrors the
-    -- bookends preset library's pagination row (chev_size = 32dp).
-    -- When a series is expanded, the label collapses to "← Series name" and
-    -- tapping anywhere collapses back to the chip's data (no pagination).
-    local Button         = require("ui/widget/button")
-    local HorizontalSpan = require("ui/widget/horizontalspan")
-    local is_expanded    = (self._expanded_series ~= nil)
-    local bw             = self
-
-    local label_widget
-    if is_expanded then
-        local SeriesLabel = InputContainer:extend{}
-        function SeriesLabel:init()
-            self.dimen = Geom:new{ w = content_w, h = label_h }
-            self[1] = CenterContainer:new{
-                dimen = self.dimen,
-                TextWidget:new{
-                    text = "\xe2\x86\x90  " .. (bw._expanded_series.series_name or "Series"),
-                    face = Font:getFace("infofont", 14),
-                    bold = true,
-                },
-            }
-            self.ges_events = {
-                Tap = { GestureRange:new{ ges = "tap", range = self.dimen } },
-            }
-        end
-        function SeriesLabel:onTap()
-            bw._expanded_series = nil
-            bw:_rebuild()
-            UIManager:setDirty(bw, "ui")
-            return true
-        end
-        label_widget = SeriesLabel:new{}
-    else
-        local chev_size = Screen:scaleBySize(32)
-        local nav_span  = Screen:scaleBySize(32)
-        local function go(p)
-            return function() bw.page = p; bw:_rebuild(); UIManager:setDirty(bw, "ui") end
-        end
-        local first = Button:new{
-            icon = "chevron.first", icon_width = chev_size, icon_height = chev_size,
-            callback = go(1), bordersize = 0, enabled = self.page > 1, show_parent = self,
-        }
-        local prev = Button:new{
-            icon = "chevron.left",  icon_width = chev_size, icon_height = chev_size,
-            callback = go(self.page - 1), bordersize = 0,
-            enabled = self.page > 1, show_parent = self,
-        }
-        local page_text = Button:new{
-            text = string.format("Page %d of %d", self.page, total_pages),
-            text_font_size = 15,
-            callback = function() end,
-            bordersize = 0, show_parent = self,
-        }
-        local next = Button:new{
-            icon = "chevron.right", icon_width = chev_size, icon_height = chev_size,
-            callback = go(self.page + 1), bordersize = 0,
-            enabled = self.page < total_pages, show_parent = self,
-        }
-        local last = Button:new{
-            icon = "chevron.last", icon_width = chev_size, icon_height = chev_size,
-            callback = go(total_pages), bordersize = 0,
-            enabled = self.page < total_pages, show_parent = self,
-        }
-        local nav = HorizontalGroup:new{
-            align = "center",
-            first, HorizontalSpan:new{ width = nav_span },
-            prev,  HorizontalSpan:new{ width = nav_span },
-            page_text, HorizontalSpan:new{ width = nav_span },
-            next,  HorizontalSpan:new{ width = nav_span },
-            last,
-        }
-        label_widget = CenterContainer:new{
-            dimen = Geom:new{ w = content_w, h = chev_size + Size.padding.default * 2 },
-            nav,
-        }
-    end
-
-    -- ── Shelf rows ────────────────────────────────────────────────────────────
-    local items_top, items_bottom = {}, {}
-    for i = 1, 4 do items_top[i]    = items[i]      end
-    for i = 1, 4 do items_bottom[i] = items[i + 4]  end
-
-    local row_top = ShelfRow.new{
-        width          = content_w,
-        height         = shelf_h,
-        gap            = PAD,
-        items          = items_top,
-        on_book_tap    = function(b) bw:_previewBook(b) end,
-        on_book_hold   = function(b) bw:_openBookMenu(b) end,
-        on_series_tap  = function(s) bw:_expandSeries(s) end,
-        on_series_hold = function(s) bw:_openBookMenu(s) end,
-    }
-    local row_bottom = ShelfRow.new{
-        width          = content_w,
-        gap            = PAD,
-        height         = shelf_h,
-        items          = items_bottom,
-        on_book_tap    = function(b) bw:_previewBook(b) end,
-        on_book_hold   = function(b) bw:_openBookMenu(b) end,
-        on_series_tap  = function(s) bw:_expandSeries(s) end,
-        on_series_hold = function(s) bw:_openBookMenu(s) end,
-    }
+    local row_top, row_bottom = self:_buildShelfRows(items, content_w, shelf_h, PAD)
+    local label_widget = self:_buildPaginationFooter(content_w, label_h, total_pages)
 
     -- ── Assemble ──────────────────────────────────────────────────────────────
     -- Page background = pure white (e-ink unprinted paper). The defensive
@@ -471,6 +380,21 @@ function BookshelfWidget:_rebuild()
         label_widget,
     }
     self._hero_parent = inner_vgroup            -- hero lives at index 1
+    -- Pagination fast-path stash: _swapShelvesInPlace re-renders only
+    -- indices [shelf_top_idx, shelf_bottom_idx, footer_idx] of inner_vgroup,
+    -- leaving hero + chips untouched. Avoids the use-after-free path where
+    -- a freed BIM bb on _preview_book gets re-rendered as a different book's
+    -- pixels (hence corrupted hero covers on every other page flip).
+    self._inner_vgroup = inner_vgroup
+    self._shelf_dims = {
+        content_w        = content_w,
+        shelf_h          = shelf_h,
+        label_h          = label_h,
+        PAD              = PAD,
+        shelf_top_idx    = 5,   -- hero, span, chips, span, ROW_TOP, ...
+        shelf_bottom_idx = 7,
+        footer_idx       = 9,
+    }
     local inner_content = FrameContainer:new{
         bordersize    = 0,
         padding       = 0,
@@ -508,7 +432,8 @@ function BookshelfWidget:_fetchChipItems(n)
     if self._expanded_series then
         local fresh = {}
         for _, b in ipairs(self._expanded_series.books) do
-            local nb = b.filepath and Repo.buildBook(b.filepath) or b
+            -- Shelf-rendering path: BIM-only meta build (no DocSettings).
+            local nb = b.filepath and Repo.buildBookMeta(b.filepath) or b
             fresh[#fresh + 1] = nb
         end
         return fresh
@@ -534,75 +459,26 @@ function BookshelfWidget:_chipLabel()
     return labels[self.chip] or ""
 end
 
--- _chipTotal() — total item count for the active chip (used in the label).
--- Returns -1 to signal "unknown" for chips where counting would be expensive
--- (e.g. "latest" requires a filesystem walk). The label-formatter omits the
--- total in that case.
-function BookshelfWidget:_chipTotal()
-    if self._expanded_series then
-        return #self._expanded_series.books
-    end
-    -- For the active chip, count from the cheapest available source. The
-    -- "latest" chip is filesystem-bound; counting it would re-walk every
-    -- rebuild, so we return -1 to signal "unknown" and the label-formatter
-    -- omits the total.
-    if self.chip == "recent" then
-        local rh = require("readhistory")
-        local lastfile = G_reader_settings:readSetting("lastfile")
-        local total = #rh.hist
-        -- Mirror getRecent's dedup: lastfile is shown as the hero, so it doesn't
-        -- count toward the Recent shelf total.
-        if lastfile then
-            for _i, entry in ipairs(rh.hist) do
-                if entry.file == lastfile then total = total - 1; break end
-            end
-        end
-        return total
-    elseif self.chip == "latest" then
-        return -1
-    elseif self.chip == "series" then
-        return #Repo.getSeriesGroups(9999)
-    elseif self.chip == "favorites" then
-        local rc = require("readcollection")
-        local count = 0
-        for _ in pairs(rc.coll and rc.coll.favorites or {}) do count = count + 1 end
-        return count
-    end
-    return 0
-end
-
--- ─── TitleBar (Task 6.2) ──────────────────────────────────────────────────────
--- Uses KOReader's TitleBar widget. A custom OverlapGroup approach is explicitly
--- avoided because TitleBar handles clock/battery/system-icon positioning
--- correctly (Phase 5 confirmed its API).
-
-function BookshelfWidget:_buildTitleBar(w)
-    -- Title carries the current time and, where available, battery%.
-    -- "BOOKSHELF" label removed; clock+battery occupy the title slot directly.
-    local ds = self:_buildDeviceState()
-    local time_str = os.date("%H:%M")
-    local batt_str = ""
-    if ds.batt then
-        batt_str = (ds.charging and "\xe2\x9a\xa1" or "") .. tostring(ds.batt) .. "%"
-    end
-    local title_text = batt_str ~= ""
-        and string.format("%s   %s", time_str, batt_str)
-        or  time_str
-    return TitleBar:new{
-        title                    = title_text,
-        align                    = "left",
-        width                    = w,
-        fullscreen               = false,
-        with_bottom_line         = true,
-        right_icon               = "appbar.menu",
-        right_icon_tap_callback  = function() self:_openGearMenu() end,
-        show_parent              = self,
-    }
-end
-
 -- ─── Device state ─────────────────────────────────────────────────────────────
 
+-- Per-rebuild device state cache. Hardware/sysfs reads (PowerD frontlight,
+-- isCharging, /proc/self/status) fire on every hero build and every preview
+-- tap — way faster than the user can perceive a stale clock or battery
+-- digit. The TTL caps how often we touch hardware; a 2s window is short
+-- enough that the clock minute and battery percent stay current.
+local _device_state_cache = nil
+local _device_state_expires_at = 0
+local DEVICE_STATE_TTL = 2  -- seconds
+
 function BookshelfWidget:_buildDeviceState()
+    local now = os.time()
+    if _device_state_cache and _device_state_expires_at > now then
+        -- Mutate `now` in the returned table so token rendering sees the
+        -- current second; everything else (hardware reads) is fine to keep.
+        _device_state_cache.now = now
+        return _device_state_cache
+    end
+
     local ok_pd, PowerD = pcall(function()
         return require("device"):getPowerDevice()
     end)
@@ -628,19 +504,17 @@ function BookshelfWidget:_buildDeviceState()
             mem_pct = math.floor((1 - free / total) * 100 + 0.5)
         end
     end
+    -- Single read + one match instead of fh:lines() (which allocates a
+    -- string per line and walks ~25 lines before VmRSS).
     local fh = io.open("/proc/self/status", "r")
     if fh then
-        for line in fh:lines() do
-            local kb = line:match("^VmRSS:%s+(%d+)%s+kB")
-            if kb then
-                ram_mib = math.floor(tonumber(kb) / 1024 + 0.5)
-                break
-            end
-        end
+        local content = fh:read("*a") or ""
         fh:close()
+        local kb = content:match("VmRSS:%s+(%d+)%s+kB")
+        if kb then ram_mib = math.floor(tonumber(kb) / 1024 + 0.5) end
     end
-    return {
-        now      = os.time(),
+    _device_state_cache = {
+        now      = now,
         batt     = (ok_pd and PowerD and PowerD.getCapacity)
                        and PowerD:getCapacity() or nil,
         charging = (ok_pd and PowerD and PowerD.isCharging)
@@ -652,6 +526,8 @@ function BookshelfWidget:_buildDeviceState()
         mem      = mem_pct,
         ram_mib  = ram_mib,
     }
+    _device_state_expires_at = now + DEVICE_STATE_TTL
+    return _device_state_cache
 end
 
 -- ─── Navigation ───────────────────────────────────────────────────────────────
@@ -675,14 +551,29 @@ end
 -- _buildHero — constructs a HeroCard reflecting current preview / lastfile.
 -- Shared between the full _rebuild path and the _previewBook fast path so
 -- both produce structurally-identical heroes.
+--
+-- Cover: HeroCard relies on book.cover_bb (the BIM thumbnail) via SpineWidget's
+-- cover_fill + bb:scale upscale path. The Lua-side bb:scale is Kindle-safe
+-- (sidesteps MuPDF's broken upscaler) and the slight nearest-neighbour
+-- blockiness from a ~1.3× upscale is invisible at hero size on e-ink. We
+-- previously opened the document fresh for a high-res publisher cover, but
+-- that froze the UI for several seconds on fat CBRs and the visual gain
+-- wasn't worth it.
 function BookshelfWidget:_buildHero(content_w, hero_cover_w, hero_cover_h, hero_h, PAD)
-    local current = self._preview_book or Repo.getCurrent()
+    -- The cached _preview_book carries a cover_bb that the *previous* hero
+    -- paint freed (ImageWidget has image_disposable=true on the default
+    -- path — the BIM bb is treated as a fresh-from-zstd one-shot copy).
+    -- Re-fetch from filepath every _buildHero so the new SpineWidget reads
+    -- a live bb, not freed memory. Without this, paginating away from the
+    -- previewed book corrupts the hero on subsequent rebuilds.
+    local current
+    if self._preview_book and self._preview_book.filepath then
+        current = Repo.buildBook(self._preview_book.filepath) or self._preview_book
+        self._preview_book = current
+    else
+        current = Repo.getCurrent()
+    end
     if current then Repo.enrichStats(current) end
-    -- KOReader doesn't track EPUB page numbers outside an active reader
-    -- session, so the page-X-of-Y formula reliably resolves to empty for
-    -- cre documents. Users with PDF/CBZ libraries (where page counts ARE
-    -- tracked) can still type "%page_num / %page_count · %book_pct" into
-    -- Settings → Edit hero card lines.
     local lines = G_reader_settings:readSetting("bookshelf_hero_lines") or {
         "[if:page_num]Page %page_num / %page_count[/if]",
         "[if:book_time_left]%book_time_left LEFT[/if]",
@@ -701,6 +592,186 @@ function BookshelfWidget:_buildHero(content_w, hero_cover_w, hero_cover_h, hero_
     }
 end
 
+-- _buildShelfRows — top + bottom shelf row from the page's items slice.
+-- Extracted so _swapShelvesInPlace can construct them without re-running
+-- the full _rebuild path (which would also rebuild hero + chips).
+function BookshelfWidget:_buildShelfRows(items, content_w, shelf_h, PAD)
+    local items_top, items_bottom = {}, {}
+    for i = 1, 4 do items_top[i]    = items[i]      end
+    for i = 1, 4 do items_bottom[i] = items[i + 4]  end
+    local bw = self
+    local row_top = ShelfRow.new{
+        width          = content_w,
+        height         = shelf_h,
+        gap            = PAD,
+        items          = items_top,
+        on_book_tap    = function(b) bw:_previewBook(b) end,
+        on_book_hold   = function(b) bw:_openBookMenu(b) end,
+        on_series_tap  = function(s) bw:_expandSeries(s) end,
+        on_series_hold = function(s) bw:_openBookMenu(s) end,
+    }
+    local row_bottom = ShelfRow.new{
+        width          = content_w,
+        height         = shelf_h,
+        gap            = PAD,
+        items          = items_bottom,
+        on_book_tap    = function(b) bw:_previewBook(b) end,
+        on_book_hold   = function(b) bw:_openBookMenu(b) end,
+        on_series_tap  = function(s) bw:_expandSeries(s) end,
+        on_series_hold = function(s) bw:_openBookMenu(s) end,
+    }
+    return row_top, row_bottom
+end
+
+-- _buildPaginationFooter — chevron nav (or series-back label when expanded).
+-- Extracted so _swapShelvesInPlace can construct a fresh footer reflecting
+-- the new page's button-enabled states.
+function BookshelfWidget:_buildPaginationFooter(content_w, label_h, total_pages)
+    local Button         = require("ui/widget/button")
+    local HorizontalSpan = require("ui/widget/horizontalspan")
+    local bw = self
+    if self._expanded_series then
+        local SeriesLabel = InputContainer:extend{}
+        function SeriesLabel:init()
+            self.dimen = Geom:new{ w = content_w, h = label_h }
+            self[1] = CenterContainer:new{
+                dimen = self.dimen,
+                TextWidget:new{
+                    text = "\xe2\x86\x90  " .. (bw._expanded_series.series_name or "Series"),
+                    face = Font:getFace("infofont", 14),
+                    bold = true,
+                },
+            }
+            self.ges_events = {
+                Tap = { GestureRange:new{ ges = "tap", range = self.dimen } },
+            }
+        end
+        function SeriesLabel:onTap()
+            bw._expanded_series = nil
+            bw:_rebuild()
+            UIManager:setDirty(bw, "ui")
+            return true
+        end
+        return SeriesLabel:new{}
+    end
+    local chev_size = Screen:scaleBySize(32)
+    local nav_span  = Screen:scaleBySize(32)
+    local function go(p)
+        return function() bw.page = p; bw:_swapShelvesInPlace() end
+    end
+    local first = Button:new{
+        icon = "chevron.first", icon_width = chev_size, icon_height = chev_size,
+        callback = go(1), bordersize = 0, enabled = self.page > 1, show_parent = self,
+    }
+    local prev = Button:new{
+        icon = "chevron.left",  icon_width = chev_size, icon_height = chev_size,
+        callback = go(self.page - 1), bordersize = 0,
+        enabled = self.page > 1, show_parent = self,
+    }
+    local page_text = Button:new{
+        text = string.format("Page %d of %d", self.page, total_pages),
+        text_font_size = 15,
+        callback = function() end,
+        bordersize = 0, show_parent = self,
+    }
+    local next_btn = Button:new{
+        icon = "chevron.right", icon_width = chev_size, icon_height = chev_size,
+        callback = go(self.page + 1), bordersize = 0,
+        enabled = self.page < total_pages, show_parent = self,
+    }
+    local last = Button:new{
+        icon = "chevron.last", icon_width = chev_size, icon_height = chev_size,
+        callback = go(total_pages), bordersize = 0,
+        enabled = self.page < total_pages, show_parent = self,
+    }
+    local nav = HorizontalGroup:new{
+        align = "center",
+        first,    HorizontalSpan:new{ width = nav_span },
+        prev,     HorizontalSpan:new{ width = nav_span },
+        page_text,HorizontalSpan:new{ width = nav_span },
+        next_btn, HorizontalSpan:new{ width = nav_span },
+        last,
+    }
+    return CenterContainer:new{
+        dimen = Geom:new{ w = content_w, h = chev_size + Size.padding.default * 2 },
+        nav,
+    }
+end
+
+-- _swapShelvesInPlace — pagination fast-path. Rebuilds only the shelf rows
+-- + footer, leaving hero + chips intact. Avoids redundant work (the chips
+-- never change with self.page; the hero only changes with _preview_book)
+-- AND avoids the use-after-free path where _buildHero rebuilds a SpineWidget
+-- against a freed BIM bb on _preview_book.cover_bb.
+function BookshelfWidget:_swapShelvesInPlace()
+    if not self._inner_vgroup or not self._shelf_dims then
+        self:_rebuild()
+        UIManager:setDirty(self, "ui")
+        return
+    end
+    local d = self._shelf_dims
+    local PAGE_SIZE = 8
+    local MAX_FETCH = 400
+    local all_items = self:_fetchChipItems(MAX_FETCH) or {}
+    local total = #all_items
+    local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
+    if self.page > total_pages then self.page = total_pages end
+    if self.page < 1 then self.page = 1 end
+    self._total_pages = total_pages
+    if total == 0 then
+        -- Going to empty state needs a structural change (hero + chips +
+        -- placeholder, no shelves) — fall back to full rebuild.
+        self:_rebuild()
+        UIManager:setDirty(self, "ui")
+        return
+    end
+    local start_idx = (self.page - 1) * PAGE_SIZE + 1
+    local items = {}
+    for i = 0, PAGE_SIZE - 1 do items[i + 1] = all_items[start_idx + i] end
+
+    local row_top, row_bottom = self:_buildShelfRows(items, d.content_w, d.shelf_h, d.PAD)
+    local footer = self:_buildPaginationFooter(d.content_w, d.label_h, total_pages)
+
+    local old_top    = self._inner_vgroup[d.shelf_top_idx]
+    local old_bottom = self._inner_vgroup[d.shelf_bottom_idx]
+    local old_footer = self._inner_vgroup[d.footer_idx]
+
+    self._inner_vgroup[d.shelf_top_idx]    = row_top
+    self._inner_vgroup[d.shelf_bottom_idx] = row_bottom
+    self._inner_vgroup[d.footer_idx]       = footer
+
+    if self._inner_vgroup.resetLayout then
+        self._inner_vgroup:resetLayout()
+    end
+    UIManager:nextTick(function()
+        for _, w in ipairs({ old_top, old_bottom, old_footer }) do
+            if w and w.free then pcall(function() w:free() end) end
+        end
+    end)
+    UIManager:setDirty(self, "ui")
+end
+
+-- Rebuild the hero from current state and swap it into _hero_parent[1].
+-- Shared between _previewBook (synchronous swap on user tap) and the async
+-- cover-load completion path. No-op if there's no live tree to swap into.
+function BookshelfWidget:_swapHeroInPlace()
+    if not self._hero_parent or not self._hero_dims then return end
+    local d = self._hero_dims
+    local new_hero = self:_buildHero(
+        d.content_w, d.hero_cover_w, d.hero_cover_h, d.hero_h, d.PAD)
+    local old_hero = self._hero_parent[1]
+    self._hero_parent[1] = new_hero
+    if self._hero_parent.resetLayout then
+        self._hero_parent:resetLayout()
+    end
+    if old_hero and old_hero.free then
+        UIManager:nextTick(function()
+            pcall(function() old_hero:free() end)
+        end)
+    end
+    UIManager:setDirty(self, "ui")
+end
+
 -- _previewBook(book) — load a shelf book into the hero area as a preview.
 -- The user reads the title/author/description there, then taps the hero
 -- to actually open it. Cleared automatically on chip change; replaced by
@@ -717,29 +788,14 @@ function BookshelfWidget:_previewBook(book)
     if self._preview_book and self._preview_book.filepath == book.filepath then
         return
     end
-    self._preview_book = book
+    -- Shelf books are built via buildBookMeta (no DocSettings) for speed.
+    -- The hero needs book_pct / page_num / last_xp to render the progress
+    -- bar and token lines, so upgrade to the full Book record here. Single-
+    -- book DocSettings read on each preview tap is fine.
+    self._preview_book = Repo.buildBook(book.filepath) or book
 
     if self._hero_parent and self._hero_dims then
-        local d = self._hero_dims
-        local new_hero = self:_buildHero(
-            d.content_w, d.hero_cover_w, d.hero_cover_h, d.hero_h, d.PAD)
-        local old_hero = self._hero_parent[1]
-        self._hero_parent[1] = new_hero
-        -- VerticalGroup caches its measured size + child offsets; clear so
-        -- the next paint re-measures (defensive — new hero is the same
-        -- height by construction, but resetLayout is cheap).
-        if self._hero_parent.resetLayout then
-            self._hero_parent:resetLayout()
-        end
-        -- Defer the old hero's free to nextTick: the in-flight paint may
-        -- still reference its bbs (mirrors the same-shape protection in
-        -- _rebuild's tree-replacement path).
-        if old_hero and old_hero.free then
-            UIManager:nextTick(function()
-                pcall(function() old_hero:free() end)
-            end)
-        end
-        UIManager:setDirty(self, "ui")
+        self:_swapHeroInPlace()
         return
     end
 
@@ -763,8 +819,7 @@ function BookshelfWidget:onSwipeNextPage()
     local total = self._total_pages or 1
     if self.page < total then
         self.page = self.page + 1
-        self:_rebuild()
-        UIManager:setDirty(self, "ui")
+        self:_swapShelvesInPlace()
     end
     return true
 end
@@ -772,8 +827,7 @@ function BookshelfWidget:onSwipePrevPage()
     if self._expanded_series then return false end
     if self.page > 1 then
         self.page = self.page - 1
-        self:_rebuild()
-        UIManager:setDirty(self, "ui")
+        self:_swapShelvesInPlace()
     end
     return true
 end

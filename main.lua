@@ -338,12 +338,19 @@ end
 -- ---------------------------------------------------------------------------
 
 function Bookshelf:onCloseDocument()
-    -- A closed document is the natural "world may have changed" boundary:
-    -- the user might have sideloaded files, moved books in FM, or just
-    -- finished one whose mtime changed. Drop the walk cache so the next
-    -- rebuild's getLatest / getSeriesGroups see fresh state.
+    -- The walk cache has a 30s TTL; sideloaded / moved / mtime-changed files
+    -- surface within that window without an explicit invalidate. Skipping
+    -- invalidation here avoids re-walking the entire library + per-candidate
+    -- meta build on every close-book → home transition (the common case).
+
+    -- The just-closed file's stats DID change (new pages read), so its
+    -- cached enrichStats fields should be dropped — the hero rebuild that
+    -- follows must see the new totals. Targeted to the closed file only.
     local Repo = require("book_repository")
-    if Repo and Repo.invalidateWalkCache then Repo.invalidateWalkCache() end
+    if Repo and Repo.invalidateStatsCache and self.ui and self.ui.document
+       and self.ui.document.file then
+        Repo.invalidateStatsCache(self.ui.document.file)
+    end
 
     -- Only re-show Bookshelf if the user is actually returning to "home"
     -- — not if the Reader is closing this document only to immediately open

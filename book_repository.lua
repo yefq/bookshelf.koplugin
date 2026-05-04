@@ -45,11 +45,17 @@ local function getDocSettings()  return require("docsettings") end
 -- series_index when present to avoid fragile string parsing; fall back to
 -- parsing the formatted series string for compatibility with older caches.
 
-function Repo.buildBook(filepath)
+-- buildBookMeta(filepath) — BookInfoManager-only Book record (no DocSettings).
+-- Used by every shelf-rendering path (getRecent / getLatest / getFavorites /
+-- getSeriesGroups), all of which only need cover/title/author/series fields.
+-- Skipping the DocSettings sidecar read is the dominant per-rebuild saving on
+-- libraries >100 books — DocSettings:open() does a Lua-parse from disk per
+-- file. Use buildBook (below) when DocSettings fields (page_num, book_pct,
+-- last_xp) are actually needed (i.e. the hero card and the previewed book).
+function Repo.buildBookMeta(filepath)
     if not filepath then return nil end
     local bim  = getBookInfoMgr()
     local info = bim:getBookInfo(filepath, true) or {}
-    local ds   = getDocSettings():open(filepath)
 
     -- Parse series info.
     -- KOReader's BookInfoManager returns info.series as "<name> #<n>" and
@@ -61,21 +67,17 @@ function Repo.buildBook(filepath)
         series_num  = info.series:match(" #(%d+)$")
     end
     if info.series_index then
-        -- Prefer the discrete numeric index over the parsed string.
         series_num = tostring(info.series_index)
     end
 
-    local book = {
+    local authors = splitAuthors(info.authors)
+    return {
         filepath    = filepath,
         filename    = (filepath:match("([^/]+)$") or filepath):gsub("%.[^.]+$", ""),
         format      = (filepath:match("%.([^.]+)$") or ""):upper(),
         title       = info.title,
-        -- authors field in BookInfoManager is a comma-separated string.
-        author      = (function()
-            local list = splitAuthors(info.authors)
-            return list and list[1] or nil
-        end)(),
-        authors     = splitAuthors(info.authors),
+        author      = authors and authors[1] or nil,
+        authors     = authors,
         series      = info.series,
         series_name = series_name,
         series_num  = series_num,
@@ -83,11 +85,17 @@ function Repo.buildBook(filepath)
         has_cover   = info.has_cover and not info.ignore_cover,
         lang        = info.language,
         description = info.description,
-        page_num    = ds:readSetting("last_page"),
         page_count  = info.pages,
-        book_pct    = ds:readSetting("percent_finished"),
-        last_xp     = ds:readSetting("last_xpointer"),
     }
+end
+
+function Repo.buildBook(filepath)
+    local book = Repo.buildBookMeta(filepath)
+    if not book then return nil end
+    local ds = getDocSettings():open(filepath)
+    book.page_num = ds:readSetting("last_page")
+    book.book_pct = ds:readSetting("percent_finished")
+    book.last_xp  = ds:readSetting("last_xpointer")
     return book
 end
 
@@ -120,7 +128,8 @@ function Repo.getRecent(limit)
     for i = 1, #rh.hist do
         local entry = rh.hist[i]
         if entry.file ~= lastfile then
-            local book = Repo.buildBook(entry.file)
+            -- Shelf path: BIM-only meta is enough (no DocSettings needed).
+            local book = Repo.buildBookMeta(entry.file)
             if book then
                 book.last_read_time = entry.time
                 out[#out + 1] = book
@@ -212,7 +221,7 @@ function Repo.getLatest(limit)
     table.sort(candidates, function(a, b) return a.mtime > b.mtime end)
     local out = {}
     for i = 1, math.min(limit or 8, #candidates) do
-        local book = Repo.buildBook(candidates[i].fp)
+        local book = Repo.buildBookMeta(candidates[i].fp)
         if book then
             book.added_time = candidates[i].mtime
             out[#out + 1] = book
@@ -236,7 +245,7 @@ function Repo.getFavorites(limit)
     end)
     local out = {}
     for i = 1, math.min(limit or 8, #items) do
-        local book = Repo.buildBook(items[i].file)
+        local book = Repo.buildBookMeta(items[i].file)
         if book then
             book.in_favorites = true
             out[#out + 1] = book
@@ -273,7 +282,12 @@ function Repo.getSeriesGroups(limit)
     local groups = {}  -- keyed by series_name
     local order  = {}  -- preserves insertion order for deterministic tie-break
     for _, c in ipairs(candidates) do
-        local book = Repo.buildBook(c.fp)
+        -- Use the BIM-only meta build: this loop runs over EVERY candidate
+        -- in the library walk (potentially hundreds of files), and we don't
+        -- need DocSettings here. The full buildBook (sidecar parse) was the
+        -- dominant per-rebuild cost on the Series chip; meta-only is just
+        -- an in-memory BookInfoManager lookup.
+        local book = Repo.buildBookMeta(c.fp)
         if book and book.series_name then
             local key = book.series_name
             if not groups[key] then
@@ -324,8 +338,32 @@ end
 -- file's partial MD5 (the same key the stats plugin uses) and read the
 -- rolled-up fields from the `book` table plus a couple of derived stats
 -- from `page_stat_data` for days-reading / pages-per-day / speed.
+--
+-- Per-filepath cache with TTL: fires on every hero rebuild + every preview
+-- tap, and the SQLite open + 3 prepared queries adds up across an
+-- interactive session. Cached fields are mutated into the passed-in book
+-- on subsequent calls within TTL. Invalidate via Repo.invalidateStatsCache()
+-- (called from onCloseDocument so freshly-read pages surface immediately).
+local STATS_CACHE_TTL = 30  -- seconds
+local _stats_cache = {}     -- filepath → { fields = {...}, expires_at = number }
+local STATS_FIELDS = {
+    "book_read_time_seconds", "book_pages_read", "days_reading_book",
+    "pages_per_day", "speed_pph", "book_time_left_minutes",
+}
+
+function Repo.invalidateStatsCache(filepath)
+    if filepath then _stats_cache[filepath] = nil
+    else _stats_cache = {} end
+end
+
 function Repo.enrichStats(book)
     if not book or not book.filepath then return end
+    local now = os.time()
+    local cached = _stats_cache[book.filepath]
+    if cached and cached.expires_at > now then
+        for _, k in ipairs(STATS_FIELDS) do book[k] = cached.fields[k] end
+        return
+    end
     -- ReaderStatistics keys books by `partial_md5_checksum` stored in the
     -- DocSettings sidecar (statistics/main.lua:2740). Read from there
     -- first; fall back to recomputing only if the sidecar is missing.
@@ -406,6 +444,11 @@ function Repo.enrichStats(book)
         local avg_per_page = total_read_time / total_read_pages
         book.book_time_left_minutes = math.floor(pages_left * avg_per_page / 60 + 0.5)
     end
+
+    -- Snapshot computed fields into the cache.
+    local snapshot = {}
+    for _, k in ipairs(STATS_FIELDS) do snapshot[k] = book[k] end
+    _stats_cache[book.filepath] = { fields = snapshot, expires_at = now + STATS_CACHE_TTL }
 end
 
 return Repo

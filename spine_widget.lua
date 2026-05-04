@@ -126,26 +126,53 @@ function RoundedCornerCard:paintTo(bb, x, y)
         local w, h    = self.width, self.height
         local bg      = self.bg_color or Blitbuffer.COLOR_WHITE
         local r_sq    = r * r
-        local function colorAt(px, py)
-            if self:_pixelInShadow(px, py) then return self.shadow_color end
-            return bg
-        end
+        -- For each row dy in [0, r), the arc test is monotonic in dx — there's
+        -- exactly one transition from "outside arc" (paint) to "inside arc"
+        -- (skip). We binary-search-equivalent it with a forward scan and emit
+        -- a single paintRect strip per corner-row instead of r per-pixel
+        -- setPixel calls. Cost drops from 4·r² FFI calls to ~4·r.
+        --
+        -- TL/TR/BL corners are guaranteed to lie outside the enclosing
+        -- shadow (their pixels have either px < shadow_offset_x or
+        -- py < shadow_offset_y), so they paint pure bg. BR can intersect
+        -- the shadow's painted area; it falls back to per-pixel.
         for dy = 0, r - 1 do
-            for dx = 0, r - 1 do
-                if (dx - r) * (dx - r) + (dy - r) * (dy - r) > r_sq then
-                    bb:setPixel(x + dx, y + dy, colorAt(dx, dy))                 -- TL
-                end
-                if dx * dx + (dy - r) * (dy - r) > r_sq then
-                    local px = w - r + dx
-                    bb:setPixel(x + px, y + dy, colorAt(px, dy))                 -- TR
-                end
-                if (dx - r) * (dx - r) + dy * dy > r_sq then
-                    local py = h - r + dy
-                    bb:setPixel(x + dx, y + py, colorAt(dx, py))                 -- BL
-                end
-                if dx * dx + dy * dy > r_sq then
-                    local px, py = w - r + dx, h - r + dy
-                    bb:setPixel(x + px, y + py, colorAt(px, py))                 -- BR
+            -- Top half (dy small): arc center is at (r, r). cutoff_top is the
+            -- smallest dx such that (dx-r)² + (dy-r)² ≤ r² — i.e. inside arc.
+            -- Pixels [0, cutoff_top) are outside.
+            local cutoff_top = 0
+            local dy_top_sq = (dy - r) * (dy - r)
+            while cutoff_top < r and (cutoff_top - r) * (cutoff_top - r) + dy_top_sq > r_sq do
+                cutoff_top = cutoff_top + 1
+            end
+            if cutoff_top > 0 then
+                bb:paintRect(x, y + dy, cutoff_top, 1, bg)                  -- TL
+                bb:paintRect(x + w - cutoff_top, y + dy, cutoff_top, 1, bg) -- TR
+            end
+            -- Bottom half (dy near h): arc center same, but our local dy
+            -- iterator runs 0..r-1 while the actual row is h-r+dy. The arc
+            -- test for BL at row (h-r+dy) is (dx-r)² + dy² > r².
+            local cutoff_bot = 0
+            local dy_bot_sq = dy * dy
+            while cutoff_bot < r and (cutoff_bot - r) * (cutoff_bot - r) + dy_bot_sq > r_sq do
+                cutoff_bot = cutoff_bot + 1
+            end
+            if cutoff_bot > 0 then
+                bb:paintRect(x, y + h - r + dy, cutoff_bot, 1, bg)          -- BL
+                -- BR may overlap the enclosing shadow — keep per-pixel for
+                -- correct shadow-color restoration. cutoff_bot pixels at the
+                -- right edge of this row need painting.
+                if self.shadow_color then
+                    for dx = 0, cutoff_bot - 1 do
+                        local px = w - cutoff_bot + dx
+                        local py = h - r + dy
+                        local color = self:_pixelInShadow(px, py)
+                                          and self.shadow_color or bg
+                        bb:setPixel(x + px, y + py, color)
+                    end
+                else
+                    bb:paintRect(x + w - cutoff_bot, y + h - r + dy,
+                                 cutoff_bot, 1, bg)                         -- BR
                 end
             end
         end
@@ -177,12 +204,12 @@ local SpineWidget = InputContainer:extend{
     cover_fill   = true,
     cover_native = false,
     -- Optional bb override. When set, takes precedence over book.cover_bb.
-    -- Lifetime defaults to caller-owned (Hero / CoverLoader case): the bb
-    -- is reused across renders and must NOT be freed by ImageWidget. When
-    -- the caller owns a one-shot copy (e.g. series_stack making per-layer
-    -- copies for a single-book series), it sets cover_bb_disposable=true
-    -- so ImageWidget can free the copy via scaleBlitBuffer / on widget
-    -- free — without this flag the copies leak across chip rebuilds.
+    -- Lifetime defaults to caller-owned: the bb is reused across renders
+    -- and must NOT be freed by ImageWidget. When the caller owns a one-shot
+    -- copy (e.g. series_stack making per-layer copies for a single-book
+    -- series), it sets cover_bb_disposable=true so ImageWidget can free
+    -- the copy via scaleBlitBuffer / on widget free — without this flag
+    -- the copies leak across chip rebuilds.
     cover_bb            = nil,
     cover_bb_disposable = false,
 }
@@ -243,18 +270,16 @@ function SpineWidget:_renderCover(bb)
 
     -- RenderImage:scaleBlitBuffer / ImageWidget's internal MuPDF scaler
     -- corrupts on UPSCALE on Kindle (horizontal stripe static); downscale
-    -- is clean. Hero card avoids this by feeding a high-resolution bb via
-    -- cover_bb (see cover_loader.lua). For the shelf-row case (cover_fill,
-    -- BookInfoManager thumbnail), some publisher-embedded covers are
-    -- smaller than the slot — we upscale them via bb:scale (Lua-side
-    -- nearest neighbour in ffi/blitbuffer.lua) which sidesteps MuPDF
-    -- entirely. KOReader exposes the same escape hatch as the
-    -- legacy_image_scaling user setting; we pick it surgically here.
+    -- is clean. Both shelf and hero use the BIM thumbnail (book.cover_bb)
+    -- and route any required upscale through bb:scale — Lua-side nearest
+    -- neighbour in ffi/blitbuffer.lua, which sidesteps MuPDF entirely.
+    -- KOReader exposes the same escape hatch as the legacy_image_scaling
+    -- user setting; we pick it surgically here.
     local would_upscale = bb_w < img_w or bb_h < img_h
 
-    -- Disposable: with the cover_bb override the caller (CoverLoader) owns
-    -- the bb's lifetime; with the default path the bb is BookInfoManager's
-    -- fresh-from-zstd copy, safe for ImageWidget to free after scaling.
+    -- Disposable: with the cover_bb override the caller owns the bb's
+    -- lifetime; with the default path the bb is BookInfoManager's fresh-
+    -- from-zstd copy, safe for ImageWidget to free after scaling.
     -- ImageWidget disposes when:
     --   * default path (no override) — bb is BookInfoManager's fresh-from-
     --     zstd copy; safe to free after scaling.

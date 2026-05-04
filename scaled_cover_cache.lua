@@ -20,8 +20,7 @@
 --
 -- Invalidation: none required during a session — BookInfoManager only
 -- re-extracts thumbnails on user-initiated metadata refresh, which is
--- out-of-band. clear() exists for plugin teardown symmetry with
--- cover_loader.
+-- out-of-band. clear() exists for plugin teardown.
 
 local ScaledCoverCache = {
     _capacity = 16,    -- ~1.7 MiB at 271×410×4 bytes
