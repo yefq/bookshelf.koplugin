@@ -286,36 +286,35 @@ function Settings:_pickTokenFallback(dialog)
     UIManager:show(menu, nil, nil, x, y)
 end
 
--- _pickHeroRegion() — opens a 5-row modal listing the editable hero regions.
--- Tapping a row delegates to hero_line_editor for that region.
-function Settings:_pickHeroRegion()
+-- _heroSubItems() — sub_item_table_func payload for "Edit hero card".
+-- Returns one entry per region with a checkbox showing the enabled state.
+-- Tap = open the line editor. Long-press = toggle enabled.
+function Settings:_heroSubItems()
     local Regions = require("hero_regions")
-    local Screen  = require("device").screen
     local items = {}
     for _i, key in ipairs(Regions.ORDER) do
         items[#items + 1] = {
-            text     = _(Regions.LABELS[key] or key),
-            callback = function()
-                if self._region_chooser then
-                    UIManager:close(self._region_chooser)
-                    self._region_chooser = nil
+            text         = _(Regions.LABELS[key] or key),
+            keep_menu_open = true,
+            checked_func = function()
+                local snap = Regions.snapshot(key)
+                return not (snap and snap.disabled)
+            end,
+            callback = function() self:_editHeroRegion(key) end,
+            hold_callback = function(touchmenu_instance)
+                local snap = Regions.snapshot(key) or {}
+                snap.disabled = not snap.disabled or nil
+                Regions.write(key, next(snap) and snap or nil)
+                if self._bw and self._bw._swapHeroRightColumnInPlace then
+                    self._bw:_swapHeroRightColumnInPlace(Regions.read())
                 end
-                self:_editHeroRegion(key)
+                if touchmenu_instance and touchmenu_instance.updateItems then
+                    touchmenu_instance:updateItems()
+                end
             end,
         }
     end
-    local menu_w = math.floor(Screen:getWidth()  * 0.7)
-    local menu_h = math.floor(Screen:getHeight() * 0.5)
-    self._region_chooser = Menu:new{
-        title      = _("Edit hero card"),
-        item_table = items,
-        is_popout  = true,
-        width      = menu_w,
-        height     = menu_h,
-    }
-    local x = math.floor((Screen:getWidth()  - menu_w) / 2)
-    local y = math.floor((Screen:getHeight() - menu_h) / 2)
-    UIManager:show(self._region_chooser, nil, nil, x, y)
+    return items
 end
 
 -- _editHeroRegion(key) — open the line editor for a single region. The
@@ -439,8 +438,8 @@ function Settings:menuItems(bw)
     if bw then self._bw = bw end
     return {
         {
-            text     = _("Edit hero card\xE2\x80\xA6"),  -- ellipsis
-            callback = function() self:_pickHeroRegion() end,
+            text                = _("Edit hero card"),
+            sub_item_table_func = function() return self:_heroSubItems() end,
         },
         {
             text     = _("Hero card font scale"),

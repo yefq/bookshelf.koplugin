@@ -358,6 +358,10 @@ function LineEditor.show(region_key, bw, settings_module)
         input           = draft.template,
         allow_newline   = true,
         edited_callback = function()
+            -- Fires DURING InputDialog:init (initTextBox calls edit_callback
+            -- before InputDialog:new returns), so `dialog` upvalue is still
+            -- nil on the very first invocation. Guard required.
+            if not dialog then return end
             local live = dialog:getInputText()
             if live ~= nil then
                 draft.template = live

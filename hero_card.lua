@@ -180,41 +180,52 @@ function HeroCard:_buildRightColumn(book, regions, state, dimen)
     local right_bottom = VerticalGroup:new{ align = "left" }
 
     -- Status (with hairline + small gap below if non-empty)
-    local status_text = Tokens.expand(regions.status.template, book, state)
-    status_text = status_text:gsub("%[/?[biu]%]", "")
-    if not Tokens.isEmpty(status_text) then
-        right_top[#right_top + 1] = buildText(status_text, regions.status, right_w)
-        right_top[#right_top + 1] = LineWidget:new{
-            dimen      = Geom:new{ w = right_w, h = Size.line.medium },
-            background = Blitbuffer.gray(0.4),
-        }
-        right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.default }
+    if not regions.status.disabled then
+        local status_text = Tokens.expand(regions.status.template, book, state)
+        status_text = status_text:gsub("%[/?[biu]%]", "")
+        if not Tokens.isEmpty(status_text) then
+            right_top[#right_top + 1] = buildText(status_text, regions.status, right_w)
+            right_top[#right_top + 1] = LineWidget:new{
+                dimen      = Geom:new{ w = right_w, h = Size.line.medium },
+                background = Blitbuffer.gray(0.4),
+            }
+            right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.default }
+        end
     end
 
     -- Title
-    local title_text = Tokens.expand(regions.title.template, book, state)
-    title_text = title_text:gsub("%[/?[biu]%]", "")
-    if not Tokens.isEmpty(title_text) then
-        right_top[#right_top + 1] = buildText(title_text, regions.title, right_w)
+    if not regions.title.disabled then
+        local title_text = Tokens.expand(regions.title.template, book, state)
+        title_text = title_text:gsub("%[/?[biu]%]", "")
+        if not Tokens.isEmpty(title_text) then
+            right_top[#right_top + 1] = buildText(title_text, regions.title, right_w)
+        end
     end
 
     -- Author
-    local author_text = Tokens.expand(regions.author.template, book, state)
-    author_text = author_text:gsub("%[/?[biu]%]", "")
-    if not Tokens.isEmpty(author_text) then
-        right_top[#right_top + 1] = buildText(author_text, regions.author, right_w)
+    if not regions.author.disabled then
+        local author_text = Tokens.expand(regions.author.template, book, state)
+        author_text = author_text:gsub("%[/?[biu]%]", "")
+        if not Tokens.isEmpty(author_text) then
+            right_top[#right_top + 1] = buildText(author_text, regions.author, right_w)
+        end
     end
 
     -- Progress (bottom-anchored)
-    local progress_text = Tokens.expand(regions.progress.template, book, state)
-    progress_text = progress_text:gsub("%[/?[biu]%]", "")
-    if not Tokens.isEmpty(progress_text) then
-        right_bottom[#right_bottom + 1] = buildProgressLine(progress_text, regions.progress, right_w, book)
+    if not regions.progress.disabled then
+        local progress_text = Tokens.expand(regions.progress.template, book, state)
+        progress_text = progress_text:gsub("%[/?[biu]%]", "")
+        if not Tokens.isEmpty(progress_text) then
+            right_bottom[#right_bottom + 1] = buildProgressLine(progress_text, regions.progress, right_w, book)
+        end
     end
 
     -- Description (fills the slack between right_top and right_bottom)
-    local desc_text = Tokens.expand(regions.description.template, book, state)
-    desc_text = desc_text:gsub("%[/?[biu]%]", "")
+    local desc_text = ""
+    if not regions.description.disabled then
+        desc_text = Tokens.expand(regions.description.template, book, state)
+        desc_text = desc_text:gsub("%[/?[biu]%]", "")
+    end
     if not Tokens.isEmpty(desc_text) then
         right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.default }
         local top_used = 0
