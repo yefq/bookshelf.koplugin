@@ -116,9 +116,7 @@ local function toggleBarToken(dialog, draft, applyLivePreview)
             text = text .. " %bar"
         end
     end
-    if dialog._input_widget and dialog._input_widget.setText then
-        dialog._input_widget:setText(text)
-    end
+    if dialog.setInputText then dialog:setInputText(text) end
     draft.template = text
     applyLivePreview()
 end
