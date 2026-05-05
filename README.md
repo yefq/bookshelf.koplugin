@@ -199,9 +199,6 @@ Bookshelf-specific keys are prefixed `bookshelf_`:
 | `bookshelf_font_scale` | Global zoom for hero text (50–200%). |
 | `bookshelf_active_chip` | Last-selected chip (`recent` / `latest` / `series` / `favorites`). |
 | `bookshelf_latest_walk_depth` | How deep the **Latest** chip scans your library. |
-| `bookshelf_legacy_keys_retired` | One-shot guard for the v0.1 → v0.2 cleanup. |
-
-The pre-v0.2 keys `bookshelf_clock_line` and `bookshelf_hero_lines` are deleted automatically on first launch with v0.2.
 
 ---
 

@@ -43,18 +43,7 @@ local Bookshelf = WidgetContainer:extend{
 -- init
 -- ---------------------------------------------------------------------------
 
--- One-shot retirement of legacy hero-line settings keys, replaced by
--- bookshelf_hero_regions in v0.2. Guarded so it only runs once.
-local function retireLegacyKeys()
-    if G_reader_settings:isTrue("bookshelf_legacy_keys_retired") then return end
-    G_reader_settings:delSetting("bookshelf_clock_line")
-    G_reader_settings:delSetting("bookshelf_hero_lines")
-    G_reader_settings:saveSetting("bookshelf_legacy_keys_retired", true)
-    G_reader_settings:flush()
-end
-
 function Bookshelf:init()
-    retireLegacyKeys()
     -- Patch the start_with menu so users can pick Bookshelf as their home.
     self:_registerStartWithMenu()
 
