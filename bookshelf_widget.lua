@@ -439,7 +439,15 @@ function BookshelfWidget:_fetchChipItems(n)
         end
         return fresh
     end
-    if self.chip == "recent"    then return Repo.getRecent(n)       end
+    if self.chip == "recent" then
+        -- Exclude whatever the hero is currently showing (preview if any,
+        -- else lastfile) so it doesn't appear twice — but don't blanket-
+        -- exclude lastfile, otherwise previewing book B hides book A
+        -- from Recent entirely.
+        local hero_filepath = self._preview_book and self._preview_book.filepath
+            or G_reader_settings:readSetting("lastfile")
+        return Repo.getRecent(n, hero_filepath)
+    end
     if self.chip == "latest"    then return Repo.getLatest(n)       end
     if self.chip == "series"    then return Repo.getSeriesGroups(n) end
     if self.chip == "favorites" then return Repo.getFavorites(n)    end

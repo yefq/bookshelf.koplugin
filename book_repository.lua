@@ -116,18 +116,21 @@ end
 -- ─── getRecent ───────────────────────────────────────────────────────────────
 -- Returns up to `limit` Book records from ReadHistory.hist, in order
 -- (ReadHistory keeps hist sorted newest-first already).
--- The lastfile (currently-reading book shown in the hero card) is skipped so
--- it doesn't appear both as the hero and as Recent slot 1.
+--
+-- `exclude_filepath` (optional) — the filepath currently shown in the hero
+-- card; that one entry is skipped so the hero and Recent slot 1 aren't a
+-- visible duplicate. Caller passes the previewed book's filepath if a
+-- preview is active, otherwise lastfile. Earlier versions of this function
+-- always excluded lastfile, which made the active book vanish entirely
+-- once you'd selected (but not opened) a different book — fixed by tying
+-- the exclusion to whatever the hero is actually displaying.
 
-function Repo.getRecent(limit)
-    local rh       = getReadHistory()
-    local lastfile = G_reader_settings:readSetting("lastfile")
+function Repo.getRecent(limit, exclude_filepath)
+    local rh  = getReadHistory()
     local out = {}
-    -- Iterate hist; skip the lastfile entry (already shown in the hero card).
-    -- Stop once we have `limit` items.
     for i = 1, #rh.hist do
         local entry = rh.hist[i]
-        if entry.file ~= lastfile then
+        if entry.file ~= exclude_filepath then
             -- Shelf path: BIM-only meta is enough (no DocSettings needed).
             local book = Repo.buildBookMeta(entry.file)
             if book then
