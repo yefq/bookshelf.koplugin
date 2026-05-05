@@ -161,8 +161,25 @@ end
 local WALK_CACHE_TTL = 30  -- seconds
 local _walk_cache = {}     -- { [key] = { list = {...}, expires_at = number } }
 
+-- Series-groups cache. The walk-cache covers the lfs.dir + per-file mtime
+-- sweep, but getSeriesGroups also iterates EVERY candidate calling
+-- buildBookMeta — that's a BookInfoManager (SQLite) lookup per book, the
+-- dominant cost on the Series chip for libraries above ~1k books.
+-- Memoise the post-iteration result (full pre-slice list) keyed on the
+-- same (home, depth) the walk uses, with a matching TTL. Invalidation
+-- piggy-backs on invalidateWalkCache so onCloseDocument naturally
+-- refreshes both — a just-read book's read-time bubble-up still lands
+-- on the next chip rebuild.
+local SERIES_CACHE_TTL = WALK_CACHE_TTL
+local _series_cache    = {}  -- { [key] = { groups = {...}, expires_at = number } }
+
 function Repo.invalidateWalkCache()
-    _walk_cache = {}
+    _walk_cache   = {}
+    _series_cache = {}
+end
+
+function Repo.invalidateSeriesCache()
+    _series_cache = {}
 end
 
 local function walkBooks(root, depth, out, current_depth)
@@ -262,6 +279,22 @@ end
 -- Books without a series_name are excluded.
 
 function Repo.getSeriesGroups(limit)
+    local home  = G_reader_settings:readSetting("home_dir") or "/"
+    local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
+    local key   = (home or "/") .. ":" .. tostring(depth or 0)
+    local now   = os.time()
+
+    -- Cached fast path: BIM lookups for every candidate are the dominant
+    -- cost on this chip for medium-to-large libraries. We slice from the
+    -- cached full list so callers using different `limit` values still
+    -- hit the cache.
+    local cached = _series_cache[key]
+    if cached and cached.expires_at > now then
+        local out = {}
+        for i = 1, math.min(limit or 4, #cached.groups) do out[i] = cached.groups[i] end
+        return out
+    end
+
     -- Build a filepath → read-time map so the series sort still favours
     -- series you've actually been reading lately.
     local rh        = getReadHistory()
@@ -273,8 +306,6 @@ function Repo.getSeriesGroups(limit)
         end
     end
 
-    local home       = G_reader_settings:readSetting("home_dir") or "/"
-    local depth      = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
     local candidates = cachedWalk(home, depth)
 
     local groups = {}  -- keyed by series_name
@@ -287,18 +318,18 @@ function Repo.getSeriesGroups(limit)
         -- an in-memory BookInfoManager lookup.
         local book = Repo.buildBookMeta(c.fp)
         if book and book.series_name then
-            local key = book.series_name
-            if not groups[key] then
-                groups[key] = { series_name = key, books = {}, latest = 0, _seen = {} }
-                order[#order + 1] = key
+            local sname = book.series_name
+            if not groups[sname] then
+                groups[sname] = { series_name = sname, books = {}, latest = 0, _seen = {} }
+                order[#order + 1] = sname
             end
-            if not groups[key]._seen[book.filepath] then
-                groups[key]._seen[book.filepath] = true
-                groups[key].books[#groups[key].books + 1] = book
+            if not groups[sname]._seen[book.filepath] then
+                groups[sname]._seen[book.filepath] = true
+                groups[sname].books[#groups[sname].books + 1] = book
             end
             local t = read_time[book.filepath] or c.mtime or 0
-            if t > groups[key].latest then
-                groups[key].latest = t
+            if t > groups[sname].latest then
+                groups[sname].latest = t
             end
         end
     end
@@ -313,6 +344,11 @@ function Repo.getSeriesGroups(limit)
             return (tonumber(a.series_num) or 0) < (tonumber(b.series_num) or 0)
         end)
     end
+
+    -- Stash the full list pre-slice so calls with different limits all
+    -- benefit from the cache.
+    _series_cache[key] = { groups = list, expires_at = now + SERIES_CACHE_TTL }
+
     local out = {}
     for i = 1, math.min(limit or 4, #list) do out[i] = list[i] end
     return out

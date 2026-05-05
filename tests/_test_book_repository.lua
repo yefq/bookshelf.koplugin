@@ -340,6 +340,60 @@ test("walk cache: second call inside TTL skips lfs.dir; invalidate forces re-wal
            "expected lfs.dir to be called after invalidate, got 0 extra calls")
 end)
 
+test("getSeriesGroups: caches result; second call within TTL skips BIM", function()
+    Repo.invalidateWalkCache() -- also clears the series cache
+    local bim_calls = 0
+    local original_bim = package.loaded["bookinfomanager"]
+    package.loaded["bookinfomanager"] = {
+        getBookInfo = function(_self, fp, _with_cover)
+            bim_calls = bim_calls + 1
+            return _G._test_bim_data and _G._test_bim_data[fp] or nil
+        end,
+    }
+    -- Reload Repo with the counting BIM stub, since getBookInfo was bound
+    -- at require-time via getBookInfoManager() inside book_repository.
+    package.loaded["book_repository"] = nil
+    local Repo2 = dofile("book_repository.lua")
+
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        local files = (path == "/lib") and { ".", "..", "a.epub", "b.epub", "c.epub" } or {}
+        local i = 0
+        return function() i = i + 1; return files[i] end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(_fp, key)
+        if key == "mode" then return "file" end
+        if key == "modification" then return 0 end
+    end
+    _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
+    _G._test_bim_data = {
+        ["/lib/a.epub"] = { title = "A1", series = "Alpha #1", series_index = 1 },
+        ["/lib/b.epub"] = { title = "A2", series = "Alpha #2", series_index = 2 },
+        ["/lib/c.epub"] = { title = "B1", series = "Beta #1",  series_index = 1 },
+    }
+
+    Repo2.getSeriesGroups(4)
+    local after_first = bim_calls
+    assert(after_first >= 3, "expected at least 3 BIM calls on first build, got " .. after_first)
+
+    Repo2.getSeriesGroups(4)
+    assert(bim_calls == after_first,
+           "expected cached series result to skip BIM, got "
+           .. (bim_calls - after_first) .. " extra calls")
+
+    -- A different limit on the cached call should still hit the cache:
+    -- the cache stashes the full list, slice happens per-call.
+    Repo2.getSeriesGroups(1)
+    assert(bim_calls == after_first,
+           "different limit on cached call should not trigger rebuild")
+
+    Repo2.invalidateWalkCache() -- chained invalidation drops series too
+    Repo2.getSeriesGroups(4)
+    assert(bim_calls > after_first,
+           "expected BIM to be called after invalidate, got 0 extra calls")
+
+    package.loaded["bookinfomanager"] = original_bim
+end)
+
 -- ============================================================================
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)
