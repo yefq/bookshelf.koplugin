@@ -314,8 +314,15 @@ function Repo.getAll(path, limit)
         if not item.is_go_up and item.path and item.path ~= "" and item.text
                 and not (item.text and item.text:find("Long%-press here")) then
             if item.is_file then
-                local b = Repo.buildBookMeta(item.path)
-                if b then out[#out + 1] = b end
+                -- FileChooser's static call doesn't run the file_filter
+                -- (it lives on instances), so unsupported types like
+                -- .css and .ttf can leak through. Gate explicitly on
+                -- SUPPORTED_EXT so only book formats reach the shelf.
+                local ext = item.path:match("%.([^.]+)$")
+                if ext and SUPPORTED_EXT[ext:lower()] then
+                    local b = Repo.buildBookMeta(item.path)
+                    if b then out[#out + 1] = b end
+                end
             elseif item.attr and item.attr.mode == "directory" then
                 out[#out + 1] = {
                     kind       = "folder",
