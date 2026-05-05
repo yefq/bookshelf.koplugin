@@ -185,12 +185,22 @@ function RoundedCornerCard:paintTo(bb, x, y)
     end
 end
 
+-- Border thickness used when the spine is the currently-previewed book.
+-- Visibly thicker than CARD_BORDER without overwhelming the cover. Image
+-- dimensions are recomputed against the active border so the cover
+-- shrinks slightly under the thicker frame rather than being painted over.
+local CARD_BORDER_SELECTED = Screen:scaleBySize(3)
+
 local SpineWidget = InputContainer:extend{
     book        = nil,
     width       = nil,
     height      = nil,
     on_tap      = nil,
     on_hold     = nil,
+    -- When true, paint the card with a thicker black border and
+    -- correspondingly-shrunk inner image. Set by ShelfRow when the
+    -- spine's filepath matches the BookshelfWidget's preview filepath.
+    is_selected = false,
     -- Cover rendering mode. Mutually exclusive:
     --   cover_fill   = true (default)  → stretch to fill (object-fit: fill)
     --   cover_native = true            → render bb at its native size,
@@ -261,10 +271,13 @@ end
 
 function SpineWidget:_renderCover(bb)
     local card_w, card_h = self.width - SHADOW_OFFSET, self.height - SHADOW_OFFSET
+    local border = self.is_selected and CARD_BORDER_SELECTED or CARD_BORDER
     -- Image fills the inside of the card border. RoundedCornerCard then
-    -- masks the four corners and draws the rounded border on top.
-    local img_w = card_w - 2 * CARD_BORDER
-    local img_h = card_h - 2 * CARD_BORDER
+    -- masks the four corners and draws the rounded border on top. Image
+    -- dimensions track the active border so the selected state shrinks
+    -- the cover slightly rather than the border encroaching on it.
+    local img_w = card_w - 2 * border
+    local img_h = card_h - 2 * border
     local bb_w  = bb:getWidth()
     local bb_h  = bb:getHeight()
 
@@ -356,7 +369,7 @@ function SpineWidget:_renderCover(bb)
         width           = card_w,
         height          = card_h,
         radius          = CARD_RADIUS,
-        border_size     = CARD_BORDER,
+        border_size     = border,
         -- The card sits at (0, 0) in the OverlapGroup; the shadow paints
         -- at (SHADOW_OFFSET, SHADOW_OFFSET) with the same w/h and same
         -- radius. Pass these so the corner mask can restore shadow grey
@@ -417,15 +430,16 @@ function SpineWidget:_renderFallback()
     -- the white page. The inner CenterContainer is sized to (card_w − 2*border,
     -- card_h − 2*border) so the FrameContainer's outer size stays exactly at
     -- card_w × card_h (matches the cover render path).
+    local border = self.is_selected and CARD_BORDER_SELECTED or CARD_BORDER
     local card = FrameContainer:new{
-        bordersize = CARD_BORDER,
+        bordersize = border,
         radius     = CARD_RADIUS,
         padding    = 0,
         background = Blitbuffer.gray(0.07),
         CenterContainer:new{
             dimen = Geom:new{
-                w = card_w - CARD_BORDER * 2,
-                h = card_h - CARD_BORDER * 2,
+                w = card_w - border * 2,
+                h = card_h - border * 2,
             },
             stack,
         },

@@ -115,29 +115,24 @@ end
 
 -- ─── getRecent ───────────────────────────────────────────────────────────────
 -- Returns up to `limit` Book records from ReadHistory.hist, in order
--- (ReadHistory keeps hist sorted newest-first already).
---
--- `exclude_filepath` (optional) — the filepath currently shown in the hero
--- card; that one entry is skipped so the hero and Recent slot 1 aren't a
--- visible duplicate. Caller passes the previewed book's filepath if a
--- preview is active, otherwise lastfile. Earlier versions of this function
--- always excluded lastfile, which made the active book vanish entirely
--- once you'd selected (but not opened) a different book — fixed by tying
--- the exclusion to whatever the hero is actually displaying.
+-- (ReadHistory keeps hist sorted newest-first already). No exclusion —
+-- the active book stays visible in the shelf, and the BookshelfWidget
+-- highlights the previewed spine instead so the user can tell which one
+-- the hero is currently displaying. Earlier iterations excluded lastfile
+-- to avoid hero+slot-1 duplication; that exchange wasn't worth the
+-- shelves jumping around as the user browsed previews.
 
-function Repo.getRecent(limit, exclude_filepath)
+function Repo.getRecent(limit)
     local rh  = getReadHistory()
     local out = {}
     for i = 1, #rh.hist do
         local entry = rh.hist[i]
-        if entry.file ~= exclude_filepath then
-            -- Shelf path: BIM-only meta is enough (no DocSettings needed).
-            local book = Repo.buildBookMeta(entry.file)
-            if book then
-                book.last_read_time = entry.time
-                out[#out + 1] = book
-                if #out >= (limit or 8) then break end
-            end
+        -- Shelf path: BIM-only meta is enough (no DocSettings needed).
+        local book = Repo.buildBookMeta(entry.file)
+        if book then
+            book.last_read_time = entry.time
+            out[#out + 1] = book
+            if #out >= (limit or 8) then break end
         end
     end
     return out

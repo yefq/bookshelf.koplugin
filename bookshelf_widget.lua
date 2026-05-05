@@ -439,15 +439,7 @@ function BookshelfWidget:_fetchChipItems(n)
         end
         return fresh
     end
-    if self.chip == "recent" then
-        -- Exclude whatever the hero is currently showing (preview if any,
-        -- else lastfile) so it doesn't appear twice — but don't blanket-
-        -- exclude lastfile, otherwise previewing book B hides book A
-        -- from Recent entirely.
-        local hero_filepath = self._preview_book and self._preview_book.filepath
-            or G_reader_settings:readSetting("lastfile")
-        return Repo.getRecent(n, hero_filepath)
-    end
+    if self.chip == "recent"    then return Repo.getRecent(n)       end
     if self.chip == "latest"    then return Repo.getLatest(n)       end
     if self.chip == "series"    then return Repo.getSeriesGroups(n) end
     if self.chip == "favorites" then return Repo.getFavorites(n)    end
@@ -604,25 +596,32 @@ function BookshelfWidget:_buildShelfRows(items, content_w, shelf_h, PAD)
     for i = 1, 4 do items_top[i]    = items[i]      end
     for i = 1, 4 do items_bottom[i] = items[i + 4]  end
     local bw = self
+    -- Highlight the spine that matches the currently-previewed filepath
+    -- so the user sees which book is showing in the hero. The row builder
+    -- threads this down to each SpineWidget; nil means no spine is
+    -- highlighted (no preview active).
+    local selected_filepath = self._preview_book and self._preview_book.filepath
     local row_top = ShelfRow.new{
-        width          = content_w,
-        height         = shelf_h,
-        gap            = PAD,
-        items          = items_top,
-        on_book_tap    = function(b) bw:_previewBook(b) end,
-        on_book_hold   = function(b) bw:_openBookMenu(b) end,
-        on_series_tap  = function(s) bw:_expandSeries(s) end,
-        on_series_hold = function(s) bw:_openBookMenu(s) end,
+        width             = content_w,
+        height            = shelf_h,
+        gap               = PAD,
+        items             = items_top,
+        selected_filepath = selected_filepath,
+        on_book_tap       = function(b) bw:_previewBook(b) end,
+        on_book_hold      = function(b) bw:_openBookMenu(b) end,
+        on_series_tap     = function(s) bw:_expandSeries(s) end,
+        on_series_hold    = function(s) bw:_openBookMenu(s) end,
     }
     local row_bottom = ShelfRow.new{
-        width          = content_w,
-        height         = shelf_h,
-        gap            = PAD,
-        items          = items_bottom,
-        on_book_tap    = function(b) bw:_previewBook(b) end,
-        on_book_hold   = function(b) bw:_openBookMenu(b) end,
-        on_series_tap  = function(s) bw:_expandSeries(s) end,
-        on_series_hold = function(s) bw:_openBookMenu(s) end,
+        width             = content_w,
+        height            = shelf_h,
+        gap               = PAD,
+        items             = items_bottom,
+        selected_filepath = selected_filepath,
+        on_book_tap       = function(b) bw:_previewBook(b) end,
+        on_book_hold      = function(b) bw:_openBookMenu(b) end,
+        on_series_tap     = function(s) bw:_expandSeries(s) end,
+        on_series_hold    = function(s) bw:_openBookMenu(s) end,
     }
     return row_top, row_bottom
 end
@@ -806,7 +805,12 @@ end
 -- covers — perceptible on every shelf-cover tap.
 function BookshelfWidget:_previewBook(book)
     if not book or not book.filepath then return end
+    -- Tap-twice-to-open: a tap on the already-selected spine confirms
+    -- the preview and opens the book. Composes with the spine highlight
+    -- — first tap marks the spine with the thicker border, second tap
+    -- on the same spine commits.
     if self._preview_book and self._preview_book.filepath == book.filepath then
+        self:_openBook(book)
         return
     end
     -- Shelf books are built via buildBookMeta (no DocSettings) for speed.
@@ -817,6 +821,12 @@ function BookshelfWidget:_previewBook(book)
 
     if self._hero_parent and self._hero_dims then
         self:_swapHeroInPlace()
+        -- Refresh the shelves so the new selected-spine highlight paints
+        -- and any previously-selected spine returns to the normal border.
+        -- Cheap (8 SpineWidget rebuilds, scaled covers reused from cache).
+        if self._inner_vgroup and self._shelf_dims then
+            self:_swapShelvesInPlace()
+        end
         return
     end
 

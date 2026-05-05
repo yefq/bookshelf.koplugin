@@ -50,6 +50,9 @@ end
 --   on_book_hold  function (book) callback
 --   on_series_tap function (series) callback
 --   on_series_hold function (series) callback
+--   selected_filepath string|nil  filepath of the spine that should
+--                                 render with the selected (thicker)
+--                                 border. Typically the previewed book.
 -- }
 function ShelfRow.new(opts)
     local n_slots = 4
@@ -80,11 +83,13 @@ function ShelfRow.new(opts)
         elseif item then
             -- Single book record
             row[#row + 1] = SpineWidget:new{
-                book    = item,
-                width   = slot_w,
-                height  = slot_h,
-                on_tap  = opts.on_book_tap,
-                on_hold = opts.on_book_hold,
+                book        = item,
+                width       = slot_w,
+                height      = slot_h,
+                on_tap      = opts.on_book_tap,
+                on_hold     = opts.on_book_hold,
+                is_selected = opts.selected_filepath
+                              and item.filepath == opts.selected_filepath,
             }
         else
             -- Empty slot — a bare Widget with a sized dimen. FrameContainer
