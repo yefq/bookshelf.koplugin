@@ -101,22 +101,31 @@ function MagazinePolygon:paintTo(bb, x, y)
     local fill  = self.fill_color
     local y_min = math.min(yl, yr)
     local y_max = math.max(yl, yr)
-    -- Per-row fill: above min(yl, yr) nothing; between min and max
-    -- the slope's x for this y; below max, full width.
+    -- Per-row fill. "Below the slope" is geometrically the side closer
+    -- to the bottom of the slot — for slope falling L→R (yl < yr) that
+    -- is the LEFT side of each slope-band row; for slope rising L→R
+    -- (yl > yr) it's the RIGHT side. Below y_max the cardboard is full
+    -- width (the rectangle portion); above y_min nothing paints.
+    local fall_lr = (yl <= yr)
     for dy = 0, h - 1 do
-        local x_start
         if dy >= y_max then
-            x_start = 0
-        elseif dy < y_min then
-            x_start = nil
-        else
-            local frac = (dy - yl) / (yr - yl)
-            x_start = math.floor((w - 1) * frac + 0.5)
-            if x_start < 0 then x_start = 0 end
-            if x_start > w - 1 then x_start = w - 1 end
-        end
-        if x_start then
-            bb:paintRect(x + x_start, y + dy, w - x_start, 1, fill)
+            bb:paintRect(x, y + dy, w, 1, fill)
+        elseif dy >= y_min then
+            local frac    = (dy - yl) / (yr - yl)
+            local x_slope = math.floor((w - 1) * frac + 0.5)
+            if x_slope < 0 then x_slope = 0 end
+            if x_slope > w - 1 then x_slope = w - 1 end
+            if fall_lr then
+                -- Slope falls L→R: cardboard to the LEFT of x_slope.
+                if x_slope > 0 then
+                    bb:paintRect(x, y + dy, x_slope, 1, fill)
+                end
+            else
+                -- Slope rises L→R: cardboard to the RIGHT of x_slope.
+                if x_slope < w then
+                    bb:paintRect(x + x_slope, y + dy, w - x_slope, 1, fill)
+                end
+            end
         end
     end
     -- Round bottom-left and bottom-right corners (page-bg knockout).
