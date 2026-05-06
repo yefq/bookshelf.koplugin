@@ -53,17 +53,20 @@ local ChipStrip = InputContainer:extend{
 }
 
 -- Breadcrumb pill rendered as a black-outlined tag (white interior) with
--- an arrow tip on the right. The arrow doubles as the leading chevron —
--- no separate "›" needed after it. Sized to the label's text width plus a
--- small horizontal pad so a long chip name like "FAVOURITES" fits and a
--- short one like "RECENT" doesn't waste space. Outline (rather than
--- filled black) keeps the pill reading as clickable rather than as a
--- selected/active chip.
+-- an arrow tip on the right. Pills CHAIN by overlapping the right tip
+-- of one with the left "notch" (empty space) of the next. The widget's
+-- placement_w deliberately EXCLUDES the right tip — when a chained next
+-- pill is laid out adjacently in a HorizontalGroup, its notch occupies
+-- exactly the same x-range as the previous tip, and because the next
+-- pill (chained=true) paints nothing in the notch area, the previous
+-- tip remains visible.
 --
--- When `chained` is true the LEFT border is omitted so the pill connects
--- seamlessly with a preceding pill's arrow tip (no double black line at
--- the join). Returns (widget, total_w, tip_w) so the caller can lay out
--- adjacent pills and record the tap zone.
+-- Text labels in chained pills get an extra `tip_w` of left padding so
+-- the text doesn't visually sit on top of the previous tip's apex.
+--
+-- Returns (widget, placement_w, tip_w). `placement_w` is what
+-- HorizontalGroup uses for layout (notch + body, NOT including tip);
+-- the tip overhangs into the next slot.
 local function arrowPillFrame(label, h, chained)
     local label_text = (label or ""):upper()
     local face       = Font:getFace("infofont", 16)
@@ -73,47 +76,48 @@ local function arrowPillFrame(label, h, chained)
         bold    = true,
         fgcolor = Blitbuffer.COLOR_BLACK,
     }
-    local h_pad   = Size.padding.large
-    local body_w  = tw:getSize().w + h_pad * 2
-    local tip_w   = math.floor(h * 0.4)
-    local total_w = body_w + tip_w
-    local b       = Size.border.thin
+    local text_w = tw:getSize().w
+    local text_h = tw:getSize().h
+    local h_pad  = Size.padding.large
+    local tip_w  = math.floor(h * 0.4)
+    local notch_w = chained and tip_w or 0
+    -- Body width: standard pad on the right; chained pills get an extra
+    -- tip_w on the LEFT inside the body so text isn't on the previous
+    -- tip's apex.
+    local left_text_pad = h_pad + (chained and tip_w or 0)
+    local body_w        = text_w + left_text_pad + h_pad
+    -- Placement width includes notch + body but NOT the right tip.
+    local placement_w = notch_w + body_w
+    local b = Size.border.thin
 
-    -- Custom shape painter: paint the outer (black) shape filled, then
-    -- knock out an inner (white) shape inset by `b` pixels — leaves a
-    -- uniform black outline. Body inner inset is on top, bottom and
-    -- left only (right side is the body/tip junction, no border); the
-    -- inner tip starts at the same junction so the body and tip
-    -- interiors flow continuously and only the outer perimeter draws.
+    -- Painter: black body + tapered black tip; inner white knockout
+    -- leaves a uniform black outline. The body's drawing is offset
+    -- right by `notch_w` so the leftmost `notch_w` pixels of the
+    -- widget's footprint stay empty (chained=true case).
     local ArrowBg = Widget:extend{}
     function ArrowBg:init()
-        self.dimen = Geom:new{ w = total_w, h = h }
+        self.dimen = Geom:new{ w = placement_w, h = h }
     end
     function ArrowBg:paintTo(bb, x, y)
         local hh = (h - 1) / 2
         local BLACK = Blitbuffer.COLOR_BLACK
         local WHITE = Blitbuffer.COLOR_WHITE
-        -- Outer filled black: body rect + tapered tip strips.
-        bb:paintRect(x, y, body_w, h, BLACK)
+        local body_x = x + notch_w
+        bb:paintRect(body_x, y, body_w, h, BLACK)
         for dy = 0, h - 1 do
             local from_center = math.abs(dy - hh)
             local row_w = math.max(0, math.floor(tip_w * (1 - from_center / hh)))
             if row_w > 0 then
-                bb:paintRect(x + body_w, y + dy, row_w, 1, BLACK)
+                bb:paintRect(body_x + body_w, y + dy, row_w, 1, BLACK)
             end
         end
-        -- Inner filled white (inset by `b`): body shrunk on top/bottom
-        -- and (unless chained) left; tip shrunk by ~2*b in width so the
-        -- slope's outline reads roughly uniform thickness. When chained,
-        -- the left edge has no border — the previous pill's arrow tip
-        -- meets pure white interior here.
         local inner_h = h - 2 * b
         if inner_h <= 0 then return end
         local inner_hh    = (inner_h - 1) / 2
         local left_inset  = chained and 0 or b
         local inner_body_w = body_w - left_inset
         if inner_body_w > 0 then
-            bb:paintRect(x + left_inset, y + b, inner_body_w, inner_h, WHITE)
+            bb:paintRect(body_x + left_inset, y + b, inner_body_w, inner_h, WHITE)
         end
         local inner_tip_w = tip_w - 2 * b
         if inner_tip_w > 0 then
@@ -121,21 +125,30 @@ local function arrowPillFrame(label, h, chained)
                 local from_center = math.abs(dy - inner_hh)
                 local row_w = math.max(0, math.floor(inner_tip_w * (1 - from_center / inner_hh)))
                 if row_w > 0 then
-                    bb:paintRect(x + body_w, y + b + dy, row_w, 1, WHITE)
+                    bb:paintRect(body_x + body_w, y + b + dy, row_w, 1, WHITE)
                 end
             end
         end
     end
 
-    local pill = OverlapGroup:new{
-        dimen = Geom:new{ w = total_w, h = h },
-        ArrowBg:new{},
-        CenterContainer:new{
-            dimen = Geom:new{ w = body_w, h = h },
-            tw,
-        },
+    -- Text positioned with FrameContainer padding — left = notch +
+    -- left_text_pad (so the text starts after the notch, then the
+    -- standard pad, plus tip_w extra for chained); top = vertical
+    -- centre.
+    local text_positioned = FrameContainer:new{
+        bordersize   = 0,
+        padding      = 0,
+        padding_left = notch_w + left_text_pad,
+        padding_top  = math.floor((h - text_h) / 2),
+        tw,
     }
-    return pill, total_w, tip_w
+
+    local pill = OverlapGroup:new{
+        dimen = Geom:new{ w = placement_w, h = h },
+        ArrowBg:new{},
+        text_positioned,
+    }
+    return pill, placement_w, tip_w
 end
 
 function ChipStrip:init()
@@ -218,20 +231,18 @@ end
 -- resolves) so the existing tap pipeline keeps working in both modes.
 
 function ChipStrip:_initBreadcrumb()
-    -- Layout: chip pill + (parent crumbs as CHAINED arrow pills, no
-    -- gaps) + small gap + the deepest crumb as PLAIN TEXT (the
-    -- current/active folder isn't a tap target — you're already
-    -- there). Chip pill keeps its left border; subsequent pills are
-    -- "chained" (no left border) so the previous tip meets pure white
-    -- interior, joining the chain visually.
+    -- Layout: chip pill + (parents as CHAINED, OVERLAPPING arrow pills)
+    -- + small gap + the deepest crumb as plain text. When parents are
+    -- truncated to fit the strip width, an ELLIPSIS pill (also chained)
+    -- replaces the dropped run between the chip pill and the first
+    -- visible parent.
     local face_text = Font:getFace("infofont", 16)
     local n         = #self.breadcrumb_path
 
-    -- Chip pill at depth 0 (e.g. "HOME") — full border (chained=false).
+    -- Chip pill at depth 0 (e.g. "HOME") — chained=false (full border).
     local pill, pill_w, pill_tip_w = arrowPillFrame(self.chip_pill_label or "", self.height, false)
 
-    -- Build chained pills for parent entries (1..n-1), skipping the
-    -- deepest. Strip a trailing "/" defensively.
+    -- Chained pills for parent entries (1..n-1).
     local crumb_pills = {}
     for i = 1, n - 1 do
         local label = (self.breadcrumb_path[i].label or ""):gsub("/$", "")
@@ -257,35 +268,57 @@ function ChipStrip:_initBreadcrumb()
         deepest_w = deepest_widget:getSize().w
     end
 
-    -- Layout: pills connect with no gap; small gap before plain text.
-    local function build(visible_crumbs)
+    -- Layout helper. Pills lay out adjacently in HorizontalGroup but
+    -- the chained pills' placement_w EXCLUDES the right tip, so each
+    -- pill's tip overhangs into the next pill's notch area — pills
+    -- visually overlap by tip_w and chain together.
+    local function build(visible_pills)
         local row    = HorizontalGroup:new{ pill }
         local zones  = { { x = 0, w = pill_w, depth = 0 } }
         local cursor = pill_w
-        for _, cp in ipairs(visible_crumbs) do
+        for _, cp in ipairs(visible_pills) do
             row[#row + 1] = cp.widget
             zones[#zones + 1] = { x = cursor, w = cp.width, depth = cp.depth }
             cursor = cursor + cp.width
         end
         if deepest_widget then
-            local gap_w = pill_tip_w
+            -- Plain text for the active folder. Gap = tip_w + small
+            -- inset so the text floats clear of the last pill's tip.
+            local gap_w = pill_tip_w + Size.padding.small
             row[#row + 1] = HorizontalSpan:new{ width = gap_w }
             cursor = cursor + gap_w
             row[#row + 1] = deepest_widget
             cursor = cursor + deepest_w
-            -- No tap zone for the current/active crumb — you're already there.
         end
         return row, zones, cursor
     end
 
-    -- Truncate from the front (drop earliest parent pills) until the
-    -- chain fits the strip's width. The chip pill + the deepest crumb
-    -- always survive (chip = depth 0, deepest = current folder).
-    local visible = crumb_pills
-    local row, zones, total_w = build(visible)
-    while total_w > self.width and #visible > 0 do
-        table.remove(visible, 1)
+    -- Try to fit all parents. If the chain overflows, drop the
+    -- earliest parent and replace the dropped run with a SINGLE
+    -- ellipsis pill (chained, label "…"). Repeat until the chain
+    -- fits the strip. The ellipsis pill, when present, taps to the
+    -- depth of the FIRST hidden parent so the user can pop back into
+    -- the truncated middle.
+    local first_visible = 1
+    local row, zones, total_w
+    while true do
+        local visible = {}
+        if first_visible > 1 then
+            local ep, ew, etw = arrowPillFrame("…", self.height, true)
+            visible[1] = {
+                widget = ep,
+                width  = ew,
+                tip_w  = etw,
+                depth  = first_visible - 1,
+            }
+        end
+        for i = first_visible, #crumb_pills do
+            visible[#visible + 1] = crumb_pills[i]
+        end
         row, zones, total_w = build(visible)
+        if total_w <= self.width then break end
+        if first_visible > #crumb_pills then break end
+        first_visible = first_visible + 1
     end
 
     self._breadcrumb_zones = zones
