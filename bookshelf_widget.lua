@@ -1817,6 +1817,11 @@ end
 -- on page 1 and the hero re-derives.
 function BookshelfWidget:_drillInto(entry)
     if not entry or not entry.kind then return end
+    -- Stash the page the *outer* context was showing so a later pop can
+    -- restore it. Without this, drilling into a folder on page 3 and then
+    -- backing out drops you on page 1 of the parent listing — disorienting
+    -- when the parent has dozens of folders/series.
+    entry.parent_page = self.page
     self._drilldown_path[#self._drilldown_path + 1] = entry
     self.page = 1
     -- Pre-select the first item of the drilled-in target so the hero
@@ -1852,11 +1857,23 @@ end
 -- only the first crumb; etc.
 function BookshelfWidget:_drillBackTo(depth)
     depth = math.max(0, depth or 0)
+    -- The first entry we're about to pop carries `parent_page` — the page
+    -- the level we're returning to was on before this drill. Snapshot it
+    -- before tearing the entry down. When popping multiple levels at once
+    -- (e.g. a deep crumb tap) only the FIRST popped entry's parent_page
+    -- matters — that's the page of the level we're landing on.
+    local restore_page = 1
+    if #self._drilldown_path > depth then
+        local first_pop = self._drilldown_path[depth + 1]
+        if first_pop and first_pop.parent_page then
+            restore_page = first_pop.parent_page
+        end
+    end
     while #self._drilldown_path > depth do
         self._drilldown_path[#self._drilldown_path] = nil
     end
     self._preview_book = nil
-    self.page          = 1
+    self.page          = restore_page
     self:_rebuild()
     UIManager:setDirty(self, "ui")
 end
