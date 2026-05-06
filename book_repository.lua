@@ -35,6 +35,86 @@ local function getCollections()  return require("readcollection") end
 local function getBookInfoMgr()  return require("bookinfomanager") end
 local function getDocSettings()  return require("docsettings") end
 
+-- ─── Calibre metadata.calibre loader ─────────────────────────────────────────
+-- Calibre desktop, when syncing books to a device, drops a JSON file
+-- ("metadata.calibre" or ".metadata.calibre") at the library root with
+-- one entry per book — title, authors, tags, series, series_index, etc.
+-- For libraries managed via Calibre this gives us full metadata coverage
+-- for every book without waiting on BIM extraction. We parse it lazily
+-- and cache the resulting filepath→metadata map, refreshing when the
+-- file's mtime changes (Calibre just re-synced) or after a 60s TTL.
+local CALIBRE_TTL = 60
+local _calibre_state = {
+    last_check = 0,
+    file_path  = nil,
+    file_mtime = 0,
+    map        = nil,
+}
+
+local function _calibreMetadataFor(filepath)
+    if not filepath then return nil end
+    local now = os.time()
+    if (now - _calibre_state.last_check) <= CALIBRE_TTL
+            and _calibre_state.map ~= nil then
+        return _calibre_state.map[filepath]
+    end
+    _calibre_state.last_check = now
+    local home = G_reader_settings:readSetting("home_dir") or "/"
+    local lfs  = require("libs/libkoreader-lfs")
+    local meta_path
+    for _, name in ipairs({ "metadata.calibre", ".metadata.calibre" }) do
+        local p = home .. "/" .. name
+        if lfs.attributes(p, "mode") == "file" then
+            meta_path = p
+            break
+        end
+    end
+    if not meta_path then
+        _calibre_state.file_path = nil
+        _calibre_state.map       = nil
+        return nil
+    end
+    local attr  = lfs.attributes(meta_path)
+    local mtime = attr and attr.modification or 0
+    if _calibre_state.file_path == meta_path
+            and _calibre_state.file_mtime == mtime
+            and _calibre_state.map then
+        return _calibre_state.map[filepath]
+    end
+    -- (Re)parse the JSON file. Calibre's bundled rapidjson exposes
+    -- load_calibre for the metadata.calibre format; fall back to the
+    -- generic loader if that's missing.
+    local ok_json, rapidjson = pcall(require, "rapidjson")
+    if not ok_json then
+        _calibre_state.map = nil
+        return nil
+    end
+    local data
+    if rapidjson.load_calibre then
+        local ok, d = pcall(rapidjson.load_calibre, meta_path)
+        if ok then data = d end
+    end
+    if not data then
+        local ok, d = pcall(rapidjson.load, meta_path)
+        if ok then data = d end
+    end
+    if type(data) ~= "table" then
+        _calibre_state.map = nil
+        return nil
+    end
+    local lib_root = meta_path:gsub("/[^/]+$", "")
+    local map = {}
+    for _, book in ipairs(data) do
+        if type(book) == "table" and book.lpath then
+            map[lib_root .. "/" .. book.lpath] = book
+        end
+    end
+    _calibre_state.file_path  = meta_path
+    _calibre_state.file_mtime = mtime
+    _calibre_state.map        = map
+    return map[filepath]
+end
+
 -- ─── buildBook ────────────────────────────────────────────────────────────────
 -- Constructs a Book record for a given filepath.
 -- Fields follow spec §5.1. Metadata from BookInfoManager; position from
@@ -56,31 +136,56 @@ function Repo.buildBookMeta(filepath)
     if not filepath then return nil end
     local bim  = getBookInfoMgr()
     local info = bim:getBookInfo(filepath, true) or {}
+    -- Calibre fallback: when the user has a Calibre-managed library
+    -- their metadata.calibre file gives us full metadata for every book
+    -- without waiting on BIM extraction. Only used as a fallback per
+    -- field — BIM's data wins where present, since it was extracted from
+    -- the on-device file directly. cover_bb stays BIM-only because
+    -- metadata.calibre doesn't carry binary cover data.
+    local cb = _calibreMetadataFor(filepath)
 
     -- Parse series info.
     -- KOReader's BookInfoManager returns info.series as "<name> #<n>" and
     -- info.series_index as the bare number when the cache is populated.
-    -- We use series_index when available; otherwise parse the formatted string.
+    -- We use series_index when available; otherwise parse the formatted
+    -- string. Calibre stores series + series_index as separate fields.
     local series_name, series_num
     if info.series then
         series_name = info.series:gsub(" #%d+$", "")
         series_num  = info.series:match(" #(%d+)$")
+    elseif cb and cb.series then
+        series_name = cb.series
     end
     if info.series_index then
         series_num = tostring(info.series_index)
+    elseif cb and cb.series_index then
+        series_num = tostring(cb.series_index)
     end
 
-    local authors  = splitAuthors(info.authors)
+    local authors = splitAuthors(info.authors)
+    if (not authors or #authors == 0)
+            and cb and type(cb.authors) == "table" and #cb.authors > 0 then
+        authors = {}
+        for _i, name in ipairs(cb.authors) do
+            authors[#authors + 1] = name
+        end
+    end
     local filename = (filepath:match("([^/]+)$") or filepath):gsub("%.[^.]+$", "")
-    -- Title fallback: when BIM has no title cached (e.g. the book has
-    -- never been opened), use the filename so the hero, the spine
-    -- fallback, the breadcrumb crumb, etc. all show something readable
-    -- instead of empty / "?".
-    local title    = (info.title and info.title ~= "") and info.title or filename
-    -- Genres come from BIM's `keywords` column (which mirrors the
-    -- credocument getDocProps "keywords" field). Format varies by
-    -- author/format: typically "Sci-Fi, Fantasy" or "Sci-Fi; Fantasy".
-    -- Split on either, trim, drop empties. nil if the field is absent.
+    -- Title chain: BIM info → Calibre title → filename so the hero, the
+    -- spine fallback, the breadcrumb, etc. always have something
+    -- readable.
+    local title
+    if info.title and info.title ~= "" then
+        title = info.title
+    elseif cb and cb.title and cb.title ~= "" then
+        title = cb.title
+    else
+        title = filename
+    end
+    -- Genres come from BIM's `keywords` column (mirrors the credocument
+    -- getDocProps "keywords" field; format is typically "Sci-Fi, Fantasy"
+    -- or "Sci-Fi; Fantasy"). When BIM has none, fall back to Calibre
+    -- tags (already an array — no parsing needed).
     local genres
     if info.keywords and info.keywords ~= "" then
         genres = {}
@@ -91,6 +196,9 @@ function Repo.buildBookMeta(filepath)
             end
         end
         if #genres == 0 then genres = nil end
+    elseif cb and type(cb.tags) == "table" and #cb.tags > 0 then
+        genres = {}
+        for _i, t in ipairs(cb.tags) do genres[#genres + 1] = t end
     end
     return {
         filepath    = filepath,
@@ -105,8 +213,10 @@ function Repo.buildBookMeta(filepath)
         series_num  = series_num,
         cover_bb    = info.cover_bb,
         has_cover   = info.has_cover and not info.ignore_cover,
-        lang        = info.language,
-        description = info.description,
+        lang        = info.language or (cb and cb.languages and cb.languages[1]),
+        description = (info.description and info.description ~= "")
+                          and info.description
+                          or (cb and cb.comments) or nil,
         page_count  = info.pages,
     }
 end
