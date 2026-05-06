@@ -265,7 +265,6 @@ function Bookshelf:_extendMenuOrder()
     table.insert(order["KOMenu:menu_buttons"], 2, "bookshelf_tab")
     order.bookshelf_tab = {
         "bookshelf_toggle",
-        "bookshelf_show_fm",
         "bookshelf_hero_card",
         "bookshelf_shelf_tabs",
         "bookshelf_updates",
@@ -309,21 +308,9 @@ function Bookshelf:addToMainMenu(menu_items)
         end,
     }
 
-    menu_items.bookshelf_show_fm = {
-        text         = _("Show file browser"),
-        enabled_func = function() return outer:_isShowing() end,
-        callback     = function()
-            if outer._widget then UIManager:close(outer._widget) end
-            local FileManager = require("apps/filemanager/filemanager")
-            if FileManager.instance then
-                UIManager:setDirty(FileManager.instance, "ui")
-            end
-        end,
-        separator = true,
-    }
-
     menu_items.bookshelf_hero_card = {
         text                = _("Edit book detail view"),
+        enabled_func        = function() return outer:_isShowing() end,
         sub_item_table_func = function()
             S._bw = outer._widget
             return S:_heroSubItems()
@@ -332,6 +319,8 @@ function Bookshelf:addToMainMenu(menu_items)
 
     menu_items.bookshelf_shelf_tabs = {
         text                = _("Choose Bookshelf tabs"),
+        enabled_func        = function() return outer:_isShowing() end,
+        separator           = true,
         sub_item_table_func = function()
             S._bw = outer._widget
             return S:_chipsSubItems()
