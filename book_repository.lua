@@ -521,6 +521,77 @@ function Repo.findFirstBookIn(path, max_depth)
     return nil
 end
 
+local function _makeCollateSort(collate, rh_map)
+    local SORT_LAST = "\xEF\xBF\xBF"
+    if collate == "natural" then
+        local ok, sort_mod = pcall(require, "sort")
+        if ok and sort_mod and sort_mod.natsort_cmp then
+            local natsort = sort_mod.natsort_cmp()
+            return function(a, b) return natsort(a.name, b.name) end
+        end
+    elseif collate == "access" then
+        local rh = rh_map or {}
+        return function(a, b)
+            local ta = rh[a.fp] or a.attr.access or a.attr.modification or 0
+            local tb = rh[b.fp] or b.attr.access or b.attr.modification or 0
+            return ta > tb
+        end
+    elseif collate == "date" then
+        return function(a, b)
+            return (a.attr.modification or 0) > (b.attr.modification or 0)
+        end
+    elseif collate == "size" then
+        return function(a, b)
+            return (a.attr.size or 0) < (b.attr.size or 0)
+        end
+    elseif collate == "type" then
+        return function(a, b)
+            local ea = (a.name:match("%.([^.]+)$") or ""):lower()
+            local eb = (b.name:match("%.([^.]+)$") or ""):lower()
+            if ea ~= eb then return ea < eb end
+            return a.name:lower() < b.name:lower()
+        end
+    elseif collate == "title" then
+        return function(a, b)
+            local ta = (a.doc_props and a.doc_props.display_title or a.name):lower()
+            local tb = (b.doc_props and b.doc_props.display_title or b.name):lower()
+            return ta < tb
+        end
+    elseif collate == "authors" then
+        return function(a, b)
+            local aa = (a.doc_props and a.doc_props.authors or SORT_LAST):lower()
+            local ab = (b.doc_props and b.doc_props.authors or SORT_LAST):lower()
+            if aa ~= ab then return aa < ab end
+            local ta = (a.doc_props and a.doc_props.display_title or a.name):lower()
+            local tb = (b.doc_props and b.doc_props.display_title or b.name):lower()
+            return ta < tb
+        end
+    elseif collate == "series" then
+        return function(a, b)
+            local sa = (a.doc_props and a.doc_props.series or SORT_LAST):lower()
+            local sb = (b.doc_props and b.doc_props.series or SORT_LAST):lower()
+            if sa ~= sb then return sa < sb end
+            local ia = a.doc_props and a.doc_props.series_index
+            local ib = b.doc_props and b.doc_props.series_index
+            if ia and ib then return ia < ib end
+            local ta = (a.doc_props and a.doc_props.display_title or a.name):lower()
+            local tb = (b.doc_props and b.doc_props.display_title or b.name):lower()
+            return ta < tb
+        end
+    elseif collate == "keywords" then
+        return function(a, b)
+            local ka = (a.doc_props and a.doc_props.keywords or SORT_LAST):lower()
+            local kb = (b.doc_props and b.doc_props.keywords or SORT_LAST):lower()
+            if ka ~= kb then return ka < kb end
+            local ta = (a.doc_props and a.doc_props.display_title or a.name):lower()
+            local tb = (b.doc_props and b.doc_props.display_title or b.name):lower()
+            return ta < tb
+        end
+    end
+    -- strcoll, percent_* → alphabetical by filename
+    return function(a, b) return a.name:lower() < b.name:lower() end
+end
+
 -- getAll(path, limit, offset) → (items, total)
 -- limit/offset let callers fetch a single page slice without hydrating the
 -- full list. total is always the full item count (from cache or fresh scan)
@@ -529,8 +600,10 @@ function Repo.getAll(path, limit, offset)
     local _t0 = _gettime()
     offset = offset or 0
     path = path or G_reader_settings:readSetting("home_dir") or "/"
+    local collate   = G_reader_settings:readSetting("collate") or "strcoll"
+    local cache_key = path .. "\0" .. collate
     local now   = os.time()
-    local entry = _all_cache[path]
+    local entry = _all_cache[cache_key]
     if entry and entry.expires_at > now then
         -- HIT: hydrate only the requested slice — skips BIM lookups for
         -- every item outside the current page.
@@ -557,53 +630,107 @@ function Repo.getAll(path, limit, offset)
         return out, total
     end
 
-    local ok, FileChooser = pcall(require, "ui/widget/filechooser")
-    if not ok or not FileChooser then return {}, 0 end
-    local raw_items
-    ok, raw_items = pcall(function() return FileChooser:genItemTableFromPath(path) end)
-    if not ok or type(raw_items) ~= "table" then return {}, 0 end
+    -- MISS: list with lfs directly. FileChooser:genItemTableFromPath called as
+    -- a class method (no instance, self.ui==nil) silently fails for any collate
+    -- whose item_func needs ui (title, authors, series, keywords), and also
+    -- throws on Kindle for the access collate where attr.access is nil.
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    if not ok_lfs or not lfs or not lfs.dir then
+        logger.dbg("[bookshelf perf] getAll: MISS no lfs")
+        return {}, 0
+    end
+    local ok_dir, iter, dir_obj = pcall(lfs.dir, path)
+    if not ok_dir or type(iter) ~= "function" then
+        logger.dbg("[bookshelf perf] getAll: MISS lfs.dir failed " .. tostring(path))
+        return {}, 0
+    end
 
-    -- MISS: build the full list, cache all shapes, return just the slice.
-    local all_out = {}
-    local shapes  = {}
-    for _, item in ipairs(raw_items) do
-        -- FileChooser injects a "../ ⬆" go-up entry and an optional
-        -- "Long-press here to choose current folder" entry. Skip both —
-        -- bookshelf has its own back-navigation (breadcrumb / east-swipe).
-        if not item.is_go_up and item.path and item.path ~= "" and item.text
-                and not (item.text and item.text:find("Long%-press here")) then
-            if item.is_file then
-                -- FileChooser's static call doesn't run the file_filter
-                -- (it lives on instances), so unsupported types like
-                -- .css and .ttf can leak through. Gate explicitly on
-                -- SUPPORTED_EXT so only book formats reach the shelf.
-                local ext = item.path:match("%.([^.]+)$")
-                if ext and SUPPORTED_EXT[ext:lower()] then
-                    local b = Repo.buildBookMeta(item.path)
-                    if b then
-                        all_out[#all_out + 1] = b
-                        shapes[#shapes + 1] = { kind = "book", fp = item.path }
-                    end
-                end
-            elseif item.attr and item.attr.mode == "directory" then
-                local fb = Repo.findFirstBookIn(item.path, 3)
-                all_out[#all_out + 1] = {
-                    kind       = "folder",
-                    path       = item.path,
-                    label      = item.text,
-                    first_book = fb,
+    -- Gather entries with full attributes in one lfs call per entry.
+    local entries = {}
+    for entry in iter, dir_obj do
+        if entry ~= "." and entry ~= ".." and entry:sub(1, 1) ~= "." then
+            local fp   = path .. "/" .. entry
+            local attr = lfs.attributes(fp)
+            if attr and entry:sub(-4) ~= ".sdr" then
+                entries[#entries + 1] = { name = entry, fp = fp, attr = attr }
+            end
+        end
+    end
+
+    -- For metadata sorts, enrich each file entry with BIM fields before
+    -- sorting — BIM is already cached so this is fast for scanned libraries.
+    local SORT_LAST = "\xEF\xBF\xBF"  -- U+FFFF, sorts after all normal text
+    if collate == "title" or collate == "authors"
+            or collate == "series" or collate == "keywords" then
+        local bim = getBookInfoMgr()
+        for _, e in ipairs(entries) do
+            if e.attr.mode == "file" then
+                local info   = bim:getBookInfo(e.fp, true) or {}
+                local s_name = info.series and info.series:gsub(" #%d+$", "")
+                e.doc_props  = {
+                    display_title = info.title or e.name,
+                    authors       = info.authors or SORT_LAST,
+                    series        = s_name or SORT_LAST,
+                    series_index  = info.series_index,
+                    keywords      = info.keywords or SORT_LAST,
                 }
-                shapes[#shapes + 1] = {
-                    kind          = "folder",
-                    path          = item.path,
-                    label         = item.text,
-                    first_book_fp = fb and fb.filepath,
+            else
+                e.doc_props = {
+                    display_title = e.name,
+                    authors       = SORT_LAST,
+                    series        = SORT_LAST,
+                    keywords      = SORT_LAST,
                 }
             end
         end
     end
+
+    -- For access (last read date), build a ReadHistory map so books sort by
+    -- when KOReader opened them, not filesystem atime (unreliable on Kindle).
+    local rh_map
+    if collate == "access" then
+        local ok_rh, rh = pcall(getReadHistory)
+        if ok_rh and rh and rh.hist then
+            rh_map = {}
+            for _, e in ipairs(rh.hist) do
+                if e.file and e.time then rh_map[e.file] = e.time end
+            end
+        end
+    end
+
+    table.sort(entries, _makeCollateSort(collate, rh_map))
+
+    -- MISS: build the full list, cache all shapes, return just the slice.
+    local all_out = {}
+    local shapes  = {}
+    for _, e in ipairs(entries) do
+        if e.attr.mode == "file" then
+            local ext = e.name:match("%.([^.]+)$")
+            if ext and SUPPORTED_EXT[ext:lower()] then
+                local b = Repo.buildBookMeta(e.fp)
+                if b then
+                    all_out[#all_out + 1] = b
+                    shapes[#shapes + 1] = { kind = "book", fp = e.fp }
+                end
+            end
+        elseif e.attr.mode == "directory" then
+            local fb = Repo.findFirstBookIn(e.fp, 3)
+            all_out[#all_out + 1] = {
+                kind       = "folder",
+                path       = e.fp,
+                label      = e.name,
+                first_book = fb,
+            }
+            shapes[#shapes + 1] = {
+                kind          = "folder",
+                path          = e.fp,
+                label         = e.name,
+                first_book_fp = fb and fb.filepath,
+            }
+        end
+    end
     local total = #all_out
-    _all_cache[path] = { shapes = shapes, expires_at = now + WALK_CACHE_TTL }
+    _all_cache[cache_key] = { shapes = shapes, expires_at = now + WALK_CACHE_TTL }
     local out  = {}
     local stop = limit and math.min(offset + limit, total) or total
     for i = offset + 1, stop do out[#out + 1] = all_out[i] end

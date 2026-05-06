@@ -374,7 +374,12 @@ function BookshelfWidget:_rebuild()
         if c.key == self.chip then active_in_set = true; break end
     end
     if not active_in_set then
+        -- Skip action chips (current, search) — they have no data source.
+        -- Fall back to the first nav chip instead.
         self.chip = active_chips[1].key
+        for _, c in ipairs(active_chips) do
+            if not c.action then self.chip = c.key; break end
+        end
         G_reader_settings:saveSetting("bookshelf_active_chip", self.chip)
     end
     -- Append a search "chip" (icon-only, action-on-tap rather than
