@@ -39,6 +39,31 @@ local BookshelfWidget = InputContainer:extend{
     _drilldown_path  = {},
 }
 
+-- _coverNeedsResize(info, specs) — bookshelf-specific re-extract gate.
+-- BIM's isCachedCoverInvalid flips true on any pixel difference; with our
+-- variable hero/shelf sizing that would re-extract on every orientation flip
+-- or font-scale tweak, burning the device's battery without a visible win.
+-- Apply a 0.8 tolerance: only re-queue when the cached cover would render
+-- to <80% of the size the new spec calls for — i.e. significantly stretched
+-- on display, not just sub-pixel different. Once a book's cache reaches
+-- that band, it stays put across minor session-to-session perturbations.
+function BookshelfWidget._coverNeedsResize(info, specs)
+    if not info or not info.cover_w or not info.cover_h then return false end
+    if not info.cover_sizetag then return false end
+    local BIM = package.loaded["bookinfomanager"]
+    if not BIM or type(BIM.isCachedCoverInvalid) ~= "function"
+            or type(BIM.getCachedCoverSize) ~= "function" then
+        return false
+    end
+    if not BIM.isCachedCoverInvalid(info, specs) then return false end
+    local img_w, img_h = info.cover_sizetag:match("(%d+)x(%d+)")
+    if not img_w or not img_h then return false end
+    img_w, img_h = tonumber(img_w), tonumber(img_h)
+    local target_w, target_h = BIM.getCachedCoverSize(
+        img_w, img_h, specs.max_cover_w, specs.max_cover_h)
+    return info.cover_w < target_w * 0.8 or info.cover_h < target_h * 0.8
+end
+
 function BookshelfWidget:init()
     self.width  = Screen:getWidth()
     self.height = Screen:getHeight()
@@ -504,7 +529,7 @@ function BookshelfWidget:_rebuild()
     local n_slots = 4
     local slot_w  = math.floor((content_w - PAD * (n_slots - 1)) / n_slots)
     local slot_h  = math.floor(slot_w * 1.5)
-    self:_kickOffMissingMetaExtraction(items, slot_w, slot_h)
+    self:_kickOffMissingMetaExtraction(items, slot_w, slot_h, hero_cover_w, hero_cover_h)
 
     -- ── Assemble ──────────────────────────────────────────────────────────────
     -- Page background = pure white (e-ink unprinted paper). The defensive
@@ -615,12 +640,22 @@ end
 --
 -- Folder records carry their own first_book — we queue that too so a folder
 -- whose representative book isn't indexed yet gets a real cover next render.
-function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h)
+function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, hero_w, hero_h)
     local ok, BIM = pcall(require, "bookinfomanager")
     if not ok or not BIM or not BIM.getBookInfo then return end
     local max_tries = BIM.max_extract_tries or 3
     local files = {}
     local seen  = {}
+    -- Extract at hero-sized specs uniformly. BIM stores ONE bb per book,
+    -- and the hero slot is bigger than the shelf slot — so caching at hero
+    -- size keeps both paths sharp (shelf downscales cleanly; the existing
+    -- spine_widget comment notes downscale is the corruption-free path).
+    -- Caching at slot size and letting hero upscale leaves the hero
+    -- pixelated for the previewed/last-read book even after re-extraction.
+    local cover_specs = {
+        max_cover_w = math.max(slot_w, hero_w or slot_w),
+        max_cover_h = math.max(slot_h, hero_h or slot_h),
+    }
     local function maybe_queue(fp)
         if not fp or seen[fp] then return end
         seen[fp] = true
@@ -631,22 +666,57 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h)
         elseif info.has_meta == nil
                 and (tonumber(info.in_progress) or 0) < max_tries then
             needs = true
+        elseif info.has_cover == "Y"
+                and (tonumber(info.in_progress) or 0) < max_tries
+                and BookshelfWidget._coverNeedsResize(info, cover_specs) then
+            -- Cached cover was extracted at a smaller spec than the current
+            -- slot needs (e.g. the user previously browsed in FM list-mode,
+            -- which extracts at ~30px wide; bookshelf wants ~150px). Re-queue
+            -- so BIM's subprocess overwrites the row with a sharper thumbnail.
+            -- The helper applies a tolerance band so we don't thrash on minor
+            -- dimension changes — important since extraction is expensive.
+            needs = true
         end
         if needs then
             files[#files + 1] = {
                 filepath    = fp,
-                cover_specs = { max_cover_w = slot_w, max_cover_h = slot_h },
+                cover_specs = cover_specs,
             }
         end
     end
     for _, item in ipairs(items or {}) do
         if item then
+            -- Flat-book items (Recent / Latest / drilldown) carry filepath.
             maybe_queue(item.filepath)
+            -- Folder items (Home chip drilldown) carry first_book.
             if item.first_book then
                 maybe_queue(item.first_book.filepath)
             end
+            -- Group items (series / authors / genres / tags) carry a books
+            -- array. series_stack renders books[1] as the front cover plus
+            -- books[2..3] peeking out behind — queue all three so the
+            -- visible stack is sharp end-to-end. Capped at 3 to keep the
+            -- queue size proportional to what's actually painted.
+            if item.books then
+                for i = 1, math.min(3, #item.books) do
+                    local b = item.books[i]
+                    if b then maybe_queue(b.filepath) end
+                end
+            end
         end
     end
+    -- Hero book (preview / lastfile) may not appear in the visible shelf
+    -- items — e.g. series drilldown shows other titles in the series while
+    -- the hero stays on the user's currently-reading book. Queue it
+    -- explicitly so its cover gets the hero-sized extraction.
+    local hero_fp
+    if self._preview_book and self._preview_book.filepath then
+        hero_fp = self._preview_book.filepath
+    else
+        local cur = Repo.getCurrent and Repo.getCurrent()
+        hero_fp = cur and cur.filepath
+    end
+    if hero_fp then maybe_queue(hero_fp) end
     if #files > 0 then
         UIManager:nextTick(function()
             pcall(function() BIM:extractInBackground(files) end)
@@ -702,9 +772,21 @@ function BookshelfWidget:_pollExtraction()
     local still_pending = {}
     for _, f in ipairs(files) do
         local info = BIM:getBookInfo(f.filepath, false)
-        if info and info.has_meta == "Y" then
+        local inprog = tonumber(info and info.in_progress) or 0
+        local meta_ready = info and info.has_meta == "Y"
+        -- Cover-readiness check: matters for *re-extractions*. A pre-existing
+        -- row already has has_meta=Y, so the prior poll would flag it done
+        -- the instant we polled — before the subprocess had actually
+        -- overwritten the bb with a sharper one. We use the same tolerance
+        -- helper as the queue gate so the poll considers it done as soon as
+        -- the new bb lands within the band we'd have stopped queueing at.
+        local cover_ready = true
+        if meta_ready and info.has_cover == "Y" then
+            cover_ready = not BookshelfWidget._coverNeedsResize(info, f.cover_specs)
+        end
+        if meta_ready and inprog == 0 and cover_ready then
             any_new = true
-        elseif info and (tonumber(info.in_progress) or 0) >= max_tries then
+        elseif info and inprog >= max_tries then
             -- BIM gave up on this file; stop watching it.
         else
             still_pending[#still_pending + 1] = f
@@ -715,6 +797,13 @@ function BookshelfWidget:_pollExtraction()
         -- _swapShelvesInPlace re-fetches Book records (which re-query
         -- BIM) and re-arms polling for whatever is still missing.
         self:_swapShelvesInPlace()
+        -- The hero book may have been re-extracted too (it's queued
+        -- explicitly in _kickOffMissingMetaExtraction). Swap the hero
+        -- card so its cover picks up the new cached bb — _swapShelves
+        -- doesn't touch the hero by design.
+        if self._hero_parent and self._hero_dims then
+            self:_swapHeroInPlace()
+        end
         return
     end
     if self._bim_poll_files then
@@ -1043,11 +1132,12 @@ function BookshelfWidget:_swapShelvesInPlace()
     local footer = self:_buildPaginationFooter(d.content_w, d.label_h, total_pages)
 
     -- Kick off BIM extraction for newly-paginated books that aren't
-    -- cached yet. Same slot dims as _rebuild's call.
+    -- cached yet. Same slot + hero dims as _rebuild's call so both
+    -- consumers get a single cached cover sized for the bigger of the two.
     local n_slots = 4
     local slot_w  = math.floor((d.content_w - d.PAD * (n_slots - 1)) / n_slots)
     local slot_h  = math.floor(slot_w * 1.5)
-    self:_kickOffMissingMetaExtraction(items, slot_w, slot_h)
+    self:_kickOffMissingMetaExtraction(items, slot_w, slot_h, d.hero_cover_w, d.hero_cover_h)
 
     local old_top    = self._inner_vgroup[d.shelf_top_idx]
     local old_bottom = self._inner_vgroup[d.shelf_bottom_idx]
