@@ -406,6 +406,61 @@ end
 -- small, so the per-render rebuild cost is dominated by buildBookMeta
 -- (a SQLite lookup per book) — acceptable.
 
+-- ─── searchBooks ─────────────────────────────────────────────────────────────
+-- Library-wide substring search. Walks the same cached library list used
+-- by getLatest / getSeriesGroups / getAuthors etc., builds BIM-meta for
+-- each candidate, and matches against a haystack of title + author(s) +
+-- series_name + filename + genres. Splits the query on whitespace; every
+-- word must appear somewhere in the haystack (AND match) — case-insensitive.
+--
+-- This is the BIM-cache-backed equivalent of "Calibre Search" in
+-- KOReader-stock terms: results return instantly because the metadata is
+-- pre-indexed. (KOReader's File Search walks the filesystem freshly per
+-- query, which gets unusable past a few hundred books.)
+function Repo.searchBooks(query, limit)
+    if not query or query == "" then return {} end
+    local home  = G_reader_settings:readSetting("home_dir") or "/"
+    local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
+    local cands = cachedWalk(home, depth)
+    local words = {}
+    for w in query:gmatch("%S+") do
+        words[#words + 1] = w:lower()
+    end
+    if #words == 0 then return {} end
+    local out = {}
+    for _, c in ipairs(cands) do
+        local b = Repo.buildBookMeta(c.fp)
+        if b then
+            -- Build a single haystack string from every searchable field
+            -- so the match is one find() per word rather than per field.
+            local parts = {
+                (b.title       or ""):lower(),
+                (b.author      or ""):lower(),
+                (b.series_name or ""):lower(),
+                (b.filename    or ""):lower(),
+            }
+            if b.authors then
+                for _, a in ipairs(b.authors) do parts[#parts + 1] = a:lower() end
+            end
+            if b.genres then
+                for _, g in ipairs(b.genres) do parts[#parts + 1] = g:lower() end
+            end
+            local hay = table.concat(parts, " ")
+            local matches = true
+            for _, w in ipairs(words) do
+                if not hay:find(w, 1, true) then
+                    matches = false; break
+                end
+            end
+            if matches then
+                out[#out + 1] = b
+                if limit and #out >= limit then break end
+            end
+        end
+    end
+    return out
+end
+
 function Repo.getTags(limit)
     local rc = getCollections()
     if not rc.coll then return {} end

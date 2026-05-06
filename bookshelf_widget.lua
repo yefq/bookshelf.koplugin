@@ -264,6 +264,11 @@ function BookshelfWidget:_rebuild()
         self.chip = active_chips[1].key
         G_reader_settings:saveSetting("bookshelf_active_chip", self.chip)
     end
+    -- Append a search "chip" (icon-only, action-on-tap rather than
+    -- chip-switch). Always appended last so it sits at the right edge.
+    -- Tap is intercepted in the on_change closure below — search never
+    -- becomes self.chip, so it doesn't enter the swipe-cycle.
+    active_chips[#active_chips + 1] = { key = "search", icon = "appbar.search" }
     -- Cache the ordered chip keys + hidden state so the edge-swipe
     -- handlers can cycle between tabs without re-deriving them. The
     -- list reflects whatever ordering active_chips had built (today
@@ -271,7 +276,11 @@ function BookshelfWidget:_rebuild()
     -- fill the same slot).
     self._active_chip_keys = {}
     for _, c in ipairs(active_chips) do
-        self._active_chip_keys[#self._active_chip_keys + 1] = c.key
+        -- Exclude the search action chip from the swipe-cycle ring —
+        -- it's an action, not a navigable tab.
+        if c.key ~= "search" then
+            self._active_chip_keys[#self._active_chip_keys + 1] = c.key
+        end
     end
     self._chip_strip_hidden = hide_chip_strip
 
@@ -351,6 +360,12 @@ function BookshelfWidget:_rebuild()
         breadcrumb_path   = breadcrumb_path,
         chip_pill_label   = CHIP_LABELS[self.chip] or self.chip,
         on_change = function(key)
+            -- Search "chip" is an action, not a navigable tab — open
+            -- the search dialog and bail before switching self.chip.
+            if key == "search" then
+                self:_openSearchDialog()
+                return
+            end
             -- Switch chips → reset drill path and page; preserve
             -- _preview_book so the user's "current selection" survives
             -- a tab tour. The highlight on the new chip's shelf only
@@ -406,7 +421,11 @@ function BookshelfWidget:_rebuild()
     --   • "latest"     when home_dir is empty / yields no supported files
     if #items == 0 then
         local placeholder_text
-        if self.chip == "series" then
+        local _tip = self._drilldown_path[#self._drilldown_path]
+        if _tip and _tip.kind == "search" then
+            placeholder_text = string.format(
+                _("No matches for \"%s\""), _tip.payload.query or "")
+        elseif self.chip == "series" then
             placeholder_text = _("Nothing in Series yet · Add series metadata to your books and they will appear here")
         elseif self.chip == "authors" then
             placeholder_text = _("No authors yet · Add author metadata to your books and they will appear here")
@@ -716,7 +735,8 @@ function BookshelfWidget:_fetchChipItems(n)
     -- already carries Book records, but their cover_bbs may have been
     -- freed by a prior render. Rebuild meta-only from filepath to refresh.
     if tip and (tip.kind == "series" or tip.kind == "author"
-            or tip.kind == "genre" or tip.kind == "tag") then
+            or tip.kind == "genre" or tip.kind == "tag"
+            or tip.kind == "search") then
         local fresh = {}
         for _, b in ipairs(tip.payload.books) do
             local nb = b.filepath and Repo.buildBookMeta(b.filepath) or b
@@ -1681,7 +1701,8 @@ function BookshelfWidget:_drillInto(entry)
     -- The shelf below shows the same book with a selection border.
     self._preview_book = nil
     if (entry.kind == "series" or entry.kind == "author"
-            or entry.kind == "genre" or entry.kind == "tag")
+            or entry.kind == "genre" or entry.kind == "tag"
+            or entry.kind == "search")
             and entry.payload and entry.payload.books then
         local first = entry.payload.books[1]
         if first and first.filepath then
@@ -1749,6 +1770,52 @@ function BookshelfWidget:_expandTag(group)
         kind    = "tag",
         label   = group.series_name,
         payload = group,
+    }
+end
+
+-- _openSearchDialog: input modal that runs Repo.searchBooks and drills
+-- into the results. Search results live as a regular drill-down entry
+-- (kind = "search") so the breadcrumb arrow pill doubles as a "back to
+-- whatever I was on" affordance and the existing east-swipe / chip-pill
+-- tap clears the search.
+function BookshelfWidget:_openSearchDialog()
+    local InputDialog = require("ui/widget/inputdialog")
+    local dlg
+    dlg = InputDialog:new{
+        title      = _("Search library"),
+        input      = "",
+        input_hint = _("title, author, series, genre…"),
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id   = "close",
+                    callback = function() UIManager:close(dlg) end,
+                },
+                {
+                    text             = _("Search"),
+                    is_enter_default = true,
+                    callback = function()
+                        local query = dlg:getInputText()
+                        UIManager:close(dlg)
+                        if query and query:match("%S") then
+                            self:_searchAndDrill(query)
+                        end
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dlg)
+    dlg:onShowKeyboard()
+end
+
+function BookshelfWidget:_searchAndDrill(query)
+    local books = Repo.searchBooks(query, 200) or {}
+    self:_drillInto{
+        kind    = "search",
+        label   = string.format("Search: %s", query),
+        payload = { query = query, books = books },
     }
 end
 
