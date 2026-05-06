@@ -70,12 +70,18 @@ function Repo.buildBookMeta(filepath)
         series_num = tostring(info.series_index)
     end
 
-    local authors = splitAuthors(info.authors)
+    local authors  = splitAuthors(info.authors)
+    local filename = (filepath:match("([^/]+)$") or filepath):gsub("%.[^.]+$", "")
+    -- Title fallback: when BIM has no title cached (e.g. the book has
+    -- never been opened), use the filename so the hero, the spine
+    -- fallback, the breadcrumb crumb, etc. all show something readable
+    -- instead of empty / "?".
+    local title    = (info.title and info.title ~= "") and info.title or filename
     return {
         filepath    = filepath,
-        filename    = (filepath:match("([^/]+)$") or filepath):gsub("%.[^.]+$", ""),
+        filename    = filename,
         format      = (filepath:match("%.([^.]+)$") or ""):upper(),
-        title       = info.title,
+        title       = title,
         author      = authors and authors[1] or nil,
         authors     = authors,
         series      = info.series,
