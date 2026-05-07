@@ -1,20 +1,24 @@
 -- series_stack.lua
--- Renders a series as a stack: front cover full-size, two extra covers
--- offset diagonally behind, with a slipcase band carrying the series name
--- and a count badge at bottom-right.
+-- Renders a series/author/genre/tag slot: a single representative book
+-- cover with a compact folder card below carrying the group's name, and
+-- a count badge ("×N") on the cover's top-right edge to convey "this
+-- represents N books".
 --
--- Offset constants (in pixels):
---   LAYER2_OFFSET = 4  — back cover 2 shifted 4dp right + 4dp down from top
---   LAYER3_OFFSET = 8  — back cover 3 shifted 8dp right + 8dp down from top
--- These are implemented via FrameContainer padding rather than OverlapGroup
--- absolute positioning, since OverlapGroup does not support absolute child
--- offsets natively. The stack illusion is achieved by embedding each back
--- layer in a FrameContainer with asymmetric padding.
+-- The previous design rendered three diagonally-offset book covers
+-- (Layer1/2/3) to imply "stack" plus a black series-name band. The
+-- back layers were never visually distinguishable from the front
+-- (small offsets, identical artwork in single-book series), and they
+-- forced a defensive `safeCopy(bb)` of the cover bb to avoid a
+-- use-after-free when three SpineWidgets shared one bb. Dropping
+-- them removes both the per-paint copy and that whole class of bug.
+--
+-- The folder card matches FolderStack exactly via folder_card.lua.
+-- The count badge is the only thing that distinguishes this widget
+-- visually from FolderStack.
 
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local OverlapGroup   = require("ui/widget/overlapgroup")
-local CenterContainer= require("ui/widget/container/centercontainer")
 local TextWidget     = require("ui/widget/textwidget")
 local Geom           = require("ui/geometry")
 local GestureRange   = require("ui/gesturerange")
@@ -23,188 +27,82 @@ local Font           = require("ui/font")
 local Blitbuffer     = require("ffi/blitbuffer")
 local Screen         = require("device").screen
 local SpineWidget    = require("spine_widget")
-
--- Diagonal offset constants (pixels). Layer 3 is furthest back.
-local LAYER2_OFFSET = 4
-local LAYER3_OFFSET = 8
-
--- The slipcase band sits over the front cover and extends past it on the
--- left and right by this amount. Achieved by insetting the front cover so
--- there's room around it for the band to overhang.
-local SLIP_OVERHANG = 4
+local FolderCard     = require("folder_card")
 
 local SeriesStack = InputContainer:extend{
-    series        = nil,    -- SeriesGroup { series_name, books[] }
-    width         = nil,
-    height        = nil,
-    on_tap        = nil,    -- function(series) — expand to flat list
-    on_hold       = nil,
+    series  = nil,    -- { series_name, books[] }
+    width   = nil,
+    height  = nil,
+    on_tap  = nil,
+    on_hold = nil,
 }
 
 function SeriesStack:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local front = self.series.books[1]
-    local back2 = self.series.books[2] or front
-    local back1 = self.series.books[3] or back2
+    local books = self.series and self.series.books
+    local front = books and books[1]
 
-    -- Each layer renders via SpineWidget. When the series has < 3 books we
-    -- fall back so back2/back1 reference the SAME Book object (and the same
-    -- cover_bb). Three SpineWidgets sharing one bb is a use-after-free trap:
-    -- the first to paint calls RenderImage:scaleBlitBuffer with disposable=
-    -- true, which FREES the source bb; the other two then read freed memory
-    -- and render as stripe-static. Detect the sharing and pass the back
-    -- layer(s) a COPY via the cover_bb override prop — SpineWidget then sets
-    -- image_disposable=false so the copy stays alive for that layer alone.
-    local function safeCopy(bb)
-        if not bb or not bb.copy then return nil end
-        local ok, copy = pcall(function() return bb:copy() end)
-        return ok and copy or nil
-    end
-    local back2_bb_override = (back2 == front) and safeCopy(front.cover_bb) or nil
-    local back1_bb_override
-    if back1 == front then
-        back1_bb_override = safeCopy(front.cover_bb)
-    elseif back1 == back2 then
-        back1_bb_override = safeCopy(back2.cover_bb)
+    -- Book layer: full-slot SpineWidget for the representative cover.
+    local book_widget
+    if front then
+        book_widget = SpineWidget:new{
+            book       = front,
+            width      = self.width,
+            height     = self.height,
+            cover_fill = true,
+        }
+    else
+        -- Empty group: SpineWidget's fallback path with the group name
+        -- as the title (analogous to FolderStack's empty-folder path).
+        book_widget = SpineWidget:new{
+            book   = { title = self.series and self.series.series_name or "" },
+            width  = self.width,
+            height = self.height,
+        }
     end
 
-    -- Layer 3 (furthest back): offset 8dp right + 8dp down.
-    -- Wrapped in a FrameContainer with padding_left + padding_top so it
-    -- appears behind and to the right of the front cover.
-    -- We freshly copied the bb when the back layers fell back to a shared
-    -- book — declare the copy disposable so ImageWidget can free it during
-    -- scaleBlitBuffer / on widget tear-down. Without this the copies leak
-    -- on every chip rebuild (~2 bbs × ~125 KB per single-book series).
-    local layer3_spine = SpineWidget:new{
-        book                = back1,
-        cover_bb            = back1_bb_override,
-        cover_bb_disposable = back1_bb_override ~= nil,
-        width               = self.width - LAYER3_OFFSET,
-        height              = self.height - LAYER3_OFFSET,
-    }
-    local layer3 = FrameContainer:new{
-        bordersize     = 0,
-        padding        = 0,
-        padding_left   = LAYER3_OFFSET,
-        padding_top    = LAYER3_OFFSET,
-        layer3_spine,
-    }
-
-    -- Layer 2 (middle): offset 4dp right + 4dp down.
-    local layer2_spine = SpineWidget:new{
-        book                = back2,
-        cover_bb            = back2_bb_override,
-        cover_bb_disposable = back2_bb_override ~= nil,
-        width               = self.width - LAYER2_OFFSET,
-        height              = self.height - LAYER2_OFFSET,
-    }
-    local layer2 = FrameContainer:new{
-        bordersize     = 0,
-        padding        = 0,
-        padding_left   = LAYER2_OFFSET,
-        padding_top    = LAYER2_OFFSET,
-        layer2_spine,
-    }
-
-    -- Layer 1 (front): inset on each side by SLIP_OVERHANG so the slipcase
-    -- band can visibly extend past the cover horizontally. Wrapped in a
-    -- FrameContainer with padding_left to centre it within the OverlapGroup.
-    local layer1_inner = SpineWidget:new{
-        book   = front,
-        width  = self.width - SLIP_OVERHANG * 2,
+    local folder_widget, label_widget = FolderCard.build{
+        width  = self.width,
         height = self.height,
-    }
-    local layer1 = FrameContainer:new{
-        bordersize   = 0,
-        padding      = 0,
-        padding_left = SLIP_OVERHANG,
-        layer1_inner,
+        label  = self.series and self.series.series_name or "",
     }
 
-    -- Slipcase band: black horizontal strip in the bottom third of the
-    -- cover (centred ~78% from top), height ~18% of widget. Placed via
-    -- padding_top inside a FrameContainer wrapper so it floats at the
-    -- correct vertical position over the front cover in the OverlapGroup.
-    local band_h   = math.floor(self.height * 0.18)
-    local band_top = math.floor(self.height * 0.78) - math.floor(band_h / 2)
-
-    -- Count badge fill: pure white so the digits stay legible on top of any
-    -- cover image (covers vary; white is the safest contrast for black ink).
-    local paper = Blitbuffer.COLOR_WHITE
-
-    local band_text_pad = Size.padding.large
-    local band_inner = FrameContainer:new{
-        bordersize    = 0,
-        background    = Blitbuffer.COLOR_BLACK,
-        padding       = 0,
-        padding_left  = band_text_pad,
-        padding_right = band_text_pad,
-        CenterContainer:new{
-            dimen = Geom:new{ w = self.width - band_text_pad * 2, h = band_h },
+    -- Count badge: white pill with "×N" on the cover's top-right corner,
+    -- lifted by SHADOW_OFFSET so it sits proud of the cover top rather
+    -- than flush against it. Positioned via overlap_offset (relative to
+    -- the slot's top-left). The cover's right edge in slot coords is
+    -- (slot_w - SHADOW_OFFSET); we centre the badge on that x so half
+    -- hangs off the cover.
+    local children = {
+        book_widget,
+        folder_widget,
+        label_widget,
+    }
+    if books and #books > 0 then
+        local badge = FrameContainer:new{
+            bordersize     = Size.border.thin,
+            background     = Blitbuffer.COLOR_WHITE,
+            radius         = Screen:scaleBySize(3),
+            padding_left   = Size.padding.default,
+            padding_right  = Size.padding.default,
+            padding_top    = Size.padding.small,
+            padding_bottom = Size.padding.small,
             TextWidget:new{
-                text      = (self.series.series_name or ""):upper(),
-                face      = Font:getFace("smallinfofont", 12),
-                fgcolor   = Blitbuffer.COLOR_WHITE,
-                -- Truncate long series names so they don't overflow the
-                -- band's right edge into the count badge area.
-                max_width = self.width - band_text_pad * 2,
+                text = "\xc3\x97" .. tostring(#books),  -- × (UTF-8 U+00D7)
+                face = Font:getFace("smallinfofont", 12),
+                bold = true,
             }
         }
-    }
-    local band = FrameContainer:new{
-        bordersize  = 0,
-        padding     = 0,
-        padding_top = band_top,
-        band_inner,
-    }
+        local badge_w = badge:getSize().w
+        local cover_right_x = self.width - FolderCard.SHADOW_OFFSET
+        local badge_x = math.max(0, math.min(self.width - badge_w,
+                                             cover_right_x - math.floor(badge_w / 2)))
+        badge.overlap_offset = { badge_x, -FolderCard.SHADOW_OFFSET }
+        children[#children + 1] = badge
+    end
 
-    -- Count badge: horizontally centered, vertically straddling the slipcase
-    -- band's bottom edge so it reads as a "tab" hanging off the ribbon (half
-    -- on the band, half below). Earlier the badge sat in the bottom-left
-    -- corner of the cover, where it competed with the cover image for the
-    -- visual focus; centring it on the band makes it part of the band's
-    -- design language instead.
-    local badge_inner = FrameContainer:new{
-        bordersize     = Size.border.thin,
-        background     = paper,
-        radius         = Screen:scaleBySize(3),
-        padding_left   = Size.padding.default,
-        padding_right  = Size.padding.default,
-        padding_top    = Size.padding.small,
-        padding_bottom = Size.padding.small,
-        TextWidget:new{
-            text = "\xc3\x97" .. tostring(#self.series.books),  -- × (UTF-8 U+00D7)
-            face = Font:getFace("smallinfofont", 12),
-            bold = true,
-        }
-    }
-    local badge_w = badge_inner:getSize().w
-    local badge_h = badge_inner:getSize().h
-    -- Position the badge centred on the front cover's top-right corner so
-    -- it reads as a notification overlay on the cover itself. The cover's
-    -- right edge in OverlapGroup coords is (SLIP_OVERHANG + card_w), where
-    -- card_w accounts for the SpineWidget's own SHADOW_OFFSET on its right
-    -- side. Top edge clamped to 0 so we don't paint past the slot top.
-    local SHADOW_OFFSET = Screen:scaleBySize(4)
-    local cover_right_x = self.width - SLIP_OVERHANG - SHADOW_OFFSET
-    local badge_x = math.max(0, math.min(self.width - badge_w,
-                                         cover_right_x - math.floor(badge_w / 2)))
-    -- Lifted by SHADOW_OFFSET so the badge sits proud of the cover top
-    -- rather than flush against it — visually echoes the cover's own
-    -- bottom-right shadow allocation, and gives the digits some breathing
-    -- room above the cover image.
-    local badge_y = -SHADOW_OFFSET
-    badge_inner.overlap_offset = { badge_x, badge_y }
-    local badge = badge_inner
-
-    self[1] = OverlapGroup:new{
-        dimen = self.dimen,
-        layer3,
-        layer2,
-        layer1,
-        band,
-        badge,
-    }
+    children.dimen = self.dimen
+    self[1] = OverlapGroup:new(children)
     self.ges_events = {
         Tap  = { GestureRange:new{ ges = "tap",  range = self.dimen } },
         Hold = { GestureRange:new{ ges = "hold", range = self.dimen } },
