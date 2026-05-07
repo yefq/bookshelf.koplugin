@@ -1982,6 +1982,63 @@ function BookshelfWidget:_openBookMenu(item)
             UIManager:close(dialog)
         end
     end
+    -- Build optional navigation rows (author / series / genres).
+    -- Each item is only included if the book has the field AND the
+    -- corresponding chip is not disabled.
+    local ds = G_reader_settings:readSetting("bookshelf_chips_disabled") or {}
+    local nav_rows = {}
+    -- Go to Author
+    if book.author and book.author ~= "" and not ds["authors"] then
+        local author_name = book.author
+        nav_rows[#nav_rows + 1] = {
+            { text = "Go to author: " .. author_name,
+              callback = closing(function()
+                local group = Repo.findGroup("author", author_name)
+                if not group then
+                    group = { kind = "author", series_name = author_name,
+                              books = { book }, latest = 0 }
+                end
+                bw:_expandAuthor(group)
+              end) },
+        }
+    end
+    -- Go to Series
+    -- Book records carry `series_name` (cleaned, e.g. "Foundation") which
+    -- is the same key used by series group records. `book.series` is the
+    -- raw BIM string (e.g. "Foundation #1") — do NOT use it here.
+    if book.series_name and book.series_name ~= "" and not ds["series"] then
+        local series_name = book.series_name
+        nav_rows[#nav_rows + 1] = {
+            { text = "Go to series: " .. series_name,
+              callback = closing(function()
+                local group = Repo.findGroup("series", series_name)
+                if not group then
+                    group = { kind = "series", series_name = series_name,
+                              books = { book }, latest = 0 }
+                end
+                bw:_expandSeries(group)
+              end) },
+        }
+    end
+    -- Go to Genre (up to 3)
+    if book.genres and #book.genres > 0 and not ds["genres"] then
+        local max_genres = math.min(#book.genres, 3)
+        for i = 1, max_genres do
+            local genre_name = book.genres[i]
+            nav_rows[#nav_rows + 1] = {
+                { text = "Go to genre: " .. genre_name,
+                  callback = closing(function()
+                    local group = Repo.findGroup("genre", genre_name)
+                    if not group then
+                        group = { kind = "genre", series_name = genre_name,
+                                  books = { book }, latest = 0 }
+                    end
+                    bw:_expandGenre(group)
+                  end) },
+            }
+        end
+    end
+
     dialog = ButtonDialog:new{
         title = book.title or book.filename or "Book",
         buttons = {
@@ -1998,11 +2055,6 @@ function BookshelfWidget:_openBookMenu(item)
                   end) },
                 { text = fav_label,
                   callback = closing(function()
-                    -- Toggle favourite status. KOReader API quirk: removeItem
-                    -- writes the collections file to disk automatically;
-                    -- addItem only updates in-memory state and relies on a
-                    -- caller-side :write() to persist. Without the explicit
-                    -- write, additions are lost on the next KOReader restart.
                     local ok, already = pcall(function()
                         return ReadCollection:isFileInCollection(book.filepath, "favorites")
                     end)
@@ -2024,11 +2076,14 @@ function BookshelfWidget:_openBookMenu(item)
                     UIManager:setDirty(bw, "ui")
                   end) },
             },
-            {
-                { text = "Cancel", callback = closing() },
-            },
         },
     }
+    -- Splice in nav rows, then Cancel
+    local btns = dialog.buttons
+    for _, row in ipairs(nav_rows) do
+        btns[#btns + 1] = row
+    end
+    btns[#btns + 1] = { { text = "Cancel", callback = closing() } }
     UIManager:show(dialog)
 end
 
