@@ -25,8 +25,14 @@ end
 local function splitAuthors(s)
     if not s or s == "" then return nil end
     local t = {}
-    for part in s:gmatch("([^,]+)") do
-        t[#t + 1] = part:match("^%s*(.-)%s*$")  -- trim whitespace
+    -- BIM stores multi-author values with "\n" separators (KOReader's
+    -- metadata convention); Calibre / older sources may use commas. Split
+    -- on either so the %authors token expander's `table.concat(t, ", ")`
+    -- produces clean comma-joined output instead of preserving newlines
+    -- and rendering each author on its own line.
+    for part in s:gmatch("[^,\n]+") do
+        local cleaned = part:match("^%s*(.-)%s*$")  -- trim whitespace
+        if cleaned ~= "" then t[#t + 1] = cleaned end
     end
     return #t > 0 and t or nil
 end
