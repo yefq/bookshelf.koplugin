@@ -1410,7 +1410,10 @@ function BookshelfWidget:_openSortMenu()
     end
 
     dialog = ButtonDialog:new{
-        anchor  = self._page_text_button,
+        -- anchor expects a function returning a Geom (per filemanager.lua's
+        -- ButtonDialog usage), not the widget itself. Reading .dimen lazily
+        -- also avoids depending on paint order at construction time.
+        anchor  = function() return bw._page_text_button and bw._page_text_button.dimen end,
         buttons = buttons,
     }
     UIManager:show(dialog)
