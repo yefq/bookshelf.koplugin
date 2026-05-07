@@ -1335,9 +1335,10 @@ function BookshelfWidget:_buildPaginationFooter(content_w, label_h, total_pages)
     local page_text = Button:new{
         text = string.format("Page %d of %d", self.page, total_pages),
         text_font_size = 15,
-        callback = function() end,
+        callback = function() bw:_openSortMenu() end,
         bordersize = 0, show_parent = self,
     }
+    self._page_text_button = page_text
     local next_btn = Button:new{
         icon = "chevron.right", icon_width = chev_size, icon_height = chev_size,
         callback = go(self.page + 1), bordersize = 0,
@@ -1360,6 +1361,86 @@ function BookshelfWidget:_buildPaginationFooter(content_w, label_h, total_pages)
         dimen = Geom:new{ w = content_w, h = chev_size + Size.padding.default * 2 },
         nav,
     }
+end
+
+-- _openSortMenu — opens an anchored ButtonDialog above the page-text button
+-- showing chip-relevant sort options. Tapping a row writes the per-chip
+-- setting and re-renders the shelf via _swapShelvesInPlace. The Recent chip
+-- shows a single inert checked row so the gesture is consistent across chips.
+function BookshelfWidget:_openSortMenu()
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local CHECK = "\xe2\x9c\x93 "  -- "✓ " — matches _openBookMenu's pattern.
+
+    local chip   = self.chip
+    local active = Repo.getSortKey(chip)
+    local bw     = self
+    local dialog
+
+    local function radio_row(label, sort_value)
+        local prefix = (active == sort_value) and CHECK or ""
+        return { text = prefix .. label,
+                 callback = function()
+                     G_reader_settings:saveSetting("bookshelf_sort_" .. chip, sort_value)
+                     G_reader_settings:flush()
+                     UIManager:close(dialog)
+                     bw:_swapShelvesInPlace()
+                 end }
+    end
+
+    local function toggle_row(label, setting_key)
+        local on     = G_reader_settings:readSetting(setting_key) == true
+        local prefix = on and CHECK or ""
+        return { text = prefix .. label,
+                 callback = function()
+                     G_reader_settings:saveSetting(setting_key, not on)
+                     G_reader_settings:flush()
+                     UIManager:close(dialog)
+                     bw:_swapShelvesInPlace()
+                 end }
+    end
+
+    local buttons
+    if chip == "recent" then
+        buttons = {
+            { { text = CHECK .. _("By recently read"),
+                callback = function() UIManager:close(dialog) end } },
+        }
+    elseif chip == "all" then
+        buttons = {
+            { radio_row(_("By title"),      "title") },
+            { radio_row(_("By date added"), "date_added") },
+            { radio_row(_("By path"),       "path") },
+            { toggle_row(_("Reverse"),       "bookshelf_sort_all_reverse") },
+            { toggle_row(_("Mixed folders"), "bookshelf_sort_all_mixed") },
+        }
+    elseif chip == "latest" then
+        buttons = {
+            { radio_row(_("By date added"), "mtime") },
+            { radio_row(_("By title"),      "title") },
+        }
+    elseif chip == "favorites" then
+        buttons = {
+            { radio_row(_("By date added"),    "date_added") },
+            { radio_row(_("By title"),         "title") },
+            { radio_row(_("By recently read"), "recently_read") },
+        }
+    elseif chip == "series" or chip == "authors"
+            or chip == "genres" or chip == "tags" then
+        buttons = {
+            { radio_row(_("By name"),          "name") },
+            { radio_row(_("By latest read"),   "latest_read") },
+            { radio_row(_("By book count"),    "book_count") },
+        }
+    else
+        logger.dbg("[bookshelf] _openSortMenu: unknown chip " .. tostring(chip))
+        return
+    end
+
+    dialog = ButtonDialog:new{
+        anchor  = self._page_text_button,
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
 end
 
 -- _swapShelvesInPlace — pagination fast-path. Rebuilds only the shelf rows
