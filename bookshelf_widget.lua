@@ -1209,6 +1209,18 @@ end
 -- handler shows a fresh Bookshelf instance back on top.)
 function BookshelfWidget:_openBook(book)
     if not book or not book.filepath then return end
+    -- Stale records (Send-to-Kindle moved/removed the file after BIM cached
+    -- the path) crash KOReader's filemanagerbookinfo:show via lfs.attributes
+    -- on nil. ReaderUI:showReader nil-checks itself, but presenting a "file
+    -- missing" toast here is friendlier than its silent no-op.
+    local lfs = require("libs/libkoreader-lfs")
+    if lfs.attributes(book.filepath, "mode") ~= "file" then
+        UIManager:show(require("ui/widget/infomessage"):new{
+            text    = _("File no longer exists. The bookshelf entry is stale."),
+            timeout = 3,
+        })
+        return
+    end
     -- Preserve self.chip / self.page / self._drilldown_path / self._preview_book
     -- across the read so closing the book lands the user back where they were.
     -- Suspend the status timer + drop any pending debounced repaint
@@ -2093,6 +2105,17 @@ function BookshelfWidget:_openBookMenu(item)
         {
             { text = "Show info",
               callback = closing(function()
+                -- filemanagerbookinfo:show does lfs.attributes(file).size with
+                -- no nil guard — passing a missing filepath panics LuaJIT and
+                -- drops to stock Kindle. Bail with a toast for stale records.
+                local lfs = require("libs/libkoreader-lfs")
+                if lfs.attributes(book.filepath, "mode") ~= "file" then
+                    UIManager:show(require("ui/widget/infomessage"):new{
+                        text    = _("File no longer exists. The bookshelf entry is stale."),
+                        timeout = 3,
+                    })
+                    return
+                end
                 local FileManager = require("apps/filemanager/filemanager")
                 local FileManagerBookInfo = require("apps/filemanager/filemanagerbookinfo")
                 if FileManager.instance and FileManager.instance.bookinfo then
