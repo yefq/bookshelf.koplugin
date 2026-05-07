@@ -541,5 +541,31 @@ test("findGroup: returns hydrated group for known author", function()
 end)
 
 -- ============================================================================
+-- getSortKey
+-- ============================================================================
+
+test("getSortKey: returns chip default when setting missing", function()
+    _G._test_settings = {}
+    assert(Repo.getSortKey("authors") == "latest_read")
+    assert(Repo.getSortKey("all") == "title")
+    assert(Repo.getSortKey("latest") == "mtime")
+end)
+
+test("getSortKey: returns saved setting when valid", function()
+    _G._test_settings = { bookshelf_sort_authors = "book_count" }
+    assert(Repo.getSortKey("authors") == "book_count")
+end)
+
+test("getSortKey: falls back to default when saved value is invalid", function()
+    _G._test_settings = { bookshelf_sort_authors = "garbage_value" }
+    assert(Repo.getSortKey("authors") == "latest_read")
+end)
+
+test("getSortKey: returns nil for unknown chip", function()
+    _G._test_settings = {}
+    assert(Repo.getSortKey("nonexistent") == nil)
+end)
+
+-- ============================================================================
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)

@@ -156,6 +156,39 @@ end
 -- libraries >100 books — DocSettings:open() does a Lua-parse from disk per
 -- file. Use buildBook (below) when DocSettings fields (page_num, book_pct,
 -- last_xp) are actually needed (i.e. the hero card and the previewed book).
+-- ─── per-chip sort settings ──────────────────────────────────────────────────
+-- Each chip remembers its own sort dimension via "bookshelf_sort_<chip>".
+-- Missing/unknown values fall back to the chip default below. The widget
+-- writes via the sort menu (BookshelfWidget:_openSortMenu); each chip getter
+-- reads via Repo.getSortKey(chip).
+local _SORT_DEFAULT = {
+    all        = "title",
+    recent     = "recently_read",  -- not user-changeable; menu shows single row
+    latest     = "mtime",
+    favorites  = "date_added",
+    series     = "latest_read",
+    authors    = "latest_read",
+    genres     = "latest_read",
+    tags       = "latest_read",
+}
+
+local _SORT_VALID = {
+    all        = { title = true, date_added = true, path = true },
+    latest     = { mtime = true, title = true },
+    favorites  = { date_added = true, title = true, recently_read = true },
+    series     = { name = true, latest_read = true, book_count = true },
+    authors    = { name = true, latest_read = true, book_count = true },
+    genres     = { name = true, latest_read = true, book_count = true },
+    tags       = { name = true, latest_read = true, book_count = true },
+}
+
+function Repo.getSortKey(chip)
+    local k = G_reader_settings:readSetting("bookshelf_sort_" .. chip)
+    local valid = _SORT_VALID[chip]
+    if k and valid and valid[k] then return k end
+    return _SORT_DEFAULT[chip]
+end
+
 function Repo.buildBookMeta(filepath)
     if not filepath then return nil end
     local bim  = getBookInfoMgr()
