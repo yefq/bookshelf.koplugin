@@ -123,7 +123,7 @@ function Settings:_pickTokenViaLibraryModal(LibraryModal, dialog)
         config = {
             title = _("Insert token"),
             help_title = _("Bookshelf tokens"),
-            help_text = _([==[Tokens are placeholders that get replaced with live data when the hero card or status line renders.
+            help_text = _([==[Tokens are placeholders that get replaced with live data when the book detail view or status line renders.
 
   %title — %book_pct
   → Dune — 36%
@@ -463,7 +463,7 @@ function Settings:_pickFontScale()
     end
 
     dialog = ButtonDialog:new{
-        title = _("Hero card font scale"),
+        title = _("Book detail font scale"),
         buttons = {
             {
                 { text = "-10",  callback = function() nudge(-10) end },
