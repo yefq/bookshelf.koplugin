@@ -15,7 +15,8 @@ local Size            = require("ui/size")
 local Font            = require("ui/font")
 local UIManager       = require("ui/uimanager")
 local Blitbuffer      = require("ffi/blitbuffer")
-local Screen          = require("device").screen
+local Device          = require("device")
+local Screen          = Device.screen
 
 local _           = require("bookshelf_i18n").gettext
 
@@ -141,6 +142,18 @@ function BookshelfWidget:init()
             },
         },
     }
+
+    -- Hardware page-turn buttons (Kindle Oasis/Voyage, Kobo Forma/Libra,
+    -- Bigme/Boox/other Android e-ink with key-mapped vol keys) — bind to
+    -- the same pagination path as swipes. Without these bindings, key
+    -- events fall through to the FileManager underneath us, which
+    -- paginates its hidden file list and on Android can wedge the UI
+    -- thread long enough to trigger an ANR (issue #1).
+    if Device:hasKeys() then
+        self.key_events = self.key_events or {}
+        self.key_events.NextPage = { { Device.input.group.PgFwd } }
+        self.key_events.PrevPage = { { Device.input.group.PgBack } }
+    end
 
     -- (Top-zone tap/swipe to open the FM menu is handled by the FileManager
     -- touch-zone passthrough in handleEvent below; no need to mirror those
@@ -2395,14 +2408,12 @@ function BookshelfWidget:_previewNeighbourBook(direction)
     self:_previewBook(target)
 end
 
-function BookshelfWidget:onSwipeNextPage(_, ges)
-    -- Hero-area swipe: cycle preview to next book. Stays inside the
-    -- chip; pages flip automatically when the next book lives on a
-    -- different page than the current preview.
-    if self:_isHeroSwipe(ges) then
-        self:_previewNeighbourBook(1)
-        return true
-    end
+-- Shared pagination logic for swipe and hardware-key page-turn handlers.
+-- Hero-position-aware preview cycling is gesture-only (depends on swipe
+-- coordinates) so it stays in the swipe wrappers; everything else —
+-- page-step, chip-cycle at edges, drill-back at page 1 — is identical
+-- between input modes.
+function BookshelfWidget:_paginateNext()
     -- Pagination works inside drilled views too — a series / folder with
     -- >8 books needs to page through. Earlier this early-returned on
     -- _expanded_series because the footer label was hijacked for back;
@@ -2423,20 +2434,17 @@ function BookshelfWidget:onSwipeNextPage(_, ges)
     end
     return true
 end
-function BookshelfWidget:onSwipePrevPage(_, ges)
-    if self:_isHeroSwipe(ges) then
-        self:_previewNeighbourBook(-1)
-        return true
-    end
+
+function BookshelfWidget:_paginatePrev()
     if self.page > 1 then
         self.page = self.page - 1
         self:_swapShelvesInPlace()
         return true
     end
-    -- Already on page 1: if drilled into a folder/series, treat the
-    -- east-swipe as "go up a level" (mirrors tapping the previous
-    -- breadcrumb crumb / the chip pill at depth 1). Discoverable
-    -- escape from drill-down without aiming at the breadcrumb.
+    -- Already on page 1: if drilled into a folder/series, treat this as
+    -- "go up a level" (mirrors tapping the previous breadcrumb crumb /
+    -- the chip pill at depth 1). Discoverable escape from drill-down
+    -- without aiming at the breadcrumb.
     if #self._drilldown_path > 0 then
         self:_drillBackTo(#self._drilldown_path - 1)
         return true
@@ -2451,6 +2459,30 @@ function BookshelfWidget:onSwipePrevPage(_, ges)
     end
     return true
 end
+
+function BookshelfWidget:onSwipeNextPage(_, ges)
+    -- Hero-area swipe: cycle preview to next book. Stays inside the
+    -- chip; pages flip automatically when the next book lives on a
+    -- different page than the current preview.
+    if self:_isHeroSwipe(ges) then
+        self:_previewNeighbourBook(1)
+        return true
+    end
+    return self:_paginateNext()
+end
+
+function BookshelfWidget:onSwipePrevPage(_, ges)
+    if self:_isHeroSwipe(ges) then
+        self:_previewNeighbourBook(-1)
+        return true
+    end
+    return self:_paginatePrev()
+end
+
+-- Hardware page-turn key handlers. Skip the hero-position branch (no
+-- gesture coordinates) and dispatch straight to pagination.
+function BookshelfWidget:onNextPage() return self:_paginateNext() end
+function BookshelfWidget:onPrevPage() return self:_paginatePrev() end
 
 -- North-swipe anywhere on screen: collapse hero to compact strip, expand
 -- the grid from 2 to 3 rows. No-op when already expanded.
