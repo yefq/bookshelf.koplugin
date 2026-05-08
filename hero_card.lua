@@ -22,10 +22,33 @@ local Size            = require("ui/size")
 local Font            = require("ui/font")
 local Blitbuffer      = require("ffi/blitbuffer")
 local Screen          = require("device").screen
+local Widget          = require("ui/widget/widget")
 local SpineWidget     = require("spine_widget")
 local Tokens          = require("tokens")
 local Regions         = require("hero_regions")
 local HeroBar         = require("hero_bar")
+
+-- BleedContainer — paints its single child shifted UP by `bleed_y` pixels,
+-- exposing only the bottom `visible_h` of the child within its own dimen.
+-- Used by the compact hero strip to display the bottom slice of a full-size
+-- cover while the rest extends above the visible strip (the framebuffer
+-- clips at y < 0 so the overflow is harmless).
+local BleedContainer = Widget:extend{
+    width     = 0,
+    visible_h = 0,
+    bleed_y   = 0,
+}
+function BleedContainer:init()
+    self.dimen = Geom:new{ w = self.width, h = self.visible_h }
+end
+function BleedContainer:getSize()
+    return Geom:new{ w = self.width, h = self.visible_h }
+end
+function BleedContainer:paintTo(bb, x, y)
+    if self[1] and self[1].paintTo then
+        self[1]:paintTo(bb, x, y - self.bleed_y)
+    end
+end
 
 local HeroCard = InputContainer:extend{
     book         = nil,
@@ -37,6 +60,11 @@ local HeroCard = InputContainer:extend{
     device_state = nil,
     on_tap       = nil,
     on_hold      = nil,
+    -- Compact mode: render a thin strip with cover-bleed + title + status
+    -- only. Used by BookshelfWidget when self._expanded is true to free
+    -- vertical space for an extra shelf row while keeping the hero
+    -- discoverable.
+    compact      = false,
 }
 
 -- Reads the user's font-scale setting (% of nominal). Applied on top of
@@ -61,7 +89,9 @@ local BAR_TOKEN_PATTERN = "%%bar"
 function HeroCard:init()
     self.cover_h = self.cover_h or self.height
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    if not self.book then
+    if self.compact and self.book then
+        self[1] = self:_renderCompact()
+    elseif not self.book then
         self[1] = self:_renderEmpty()
     else
         self[1] = self:_renderFull()
@@ -387,6 +417,77 @@ function HeroCard:_buildRightColumn(book, regions, state, dimen)
             TopContainer:new{    dimen = rd, right_top },
             BottomContainer:new{ dimen = rd, right_bottom },
         },
+    }
+end
+
+-- _renderCompact — thin strip variant of the hero, used when the parent
+-- BookshelfWidget is in expanded (more-books) mode. The cover renders at
+-- its full natural height but is shifted upward by BleedContainer so only
+-- the bottom `self.height` slice shows on screen — a "peek" of the cover
+-- that signals the hero is folded up there. The right column is reduced
+-- to title (top) + status (bottom). Tap on the strip restores the full
+-- hero; the widget passes an on_tap that clears its `_expanded` flag.
+function HeroCard:_renderCompact()
+    local strip_h = self.height
+    local cover_h = self.cover_h or strip_h
+    local cover_w = self.cover_w
+
+    local cover = SpineWidget:new{
+        book    = self.book,
+        width   = cover_w,
+        height  = cover_h,
+        on_tap  = self.on_tap,
+        on_hold = self.on_hold,
+    }
+    local cover_bleed = BleedContainer:new{
+        width     = cover_w,
+        visible_h = strip_h,
+        bleed_y   = math.max(0, cover_h - strip_h),
+        cover,
+    }
+
+    local text_padding = self.pad or Size.padding.fullscreen
+    local right_w      = self.width - cover_w - text_padding
+    local regions      = Regions.read()
+    local state        = self.device_state
+
+    local right_top = VerticalGroup:new{ align = "left" }
+    if not regions.title.disabled then
+        local title_text = Tokens.expand(regions.title.template, self.book, state)
+        title_text = title_text:gsub("%[/?[biu]%]", "")
+        if not Tokens.isEmpty(title_text) then
+            right_top[#right_top + 1] = buildText(title_text, regions.title, right_w)
+        end
+    end
+
+    local right_bottom = VerticalGroup:new{ align = "left" }
+    if not regions.status.disabled then
+        local status_text = Tokens.expand(regions.status.template, self.book, state)
+        status_text = status_text:gsub("%[/?[biu]%]", "")
+        if not Tokens.isEmpty(status_text) then
+            right_bottom[#right_bottom + 1] = buildText(status_text, regions.status, right_w)
+        end
+    end
+
+    local rd = Geom:new{ w = right_w, h = strip_h }
+    local right = FrameContainer:new{
+        bordersize = 0,
+        padding    = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        width      = rd.w,
+        height     = rd.h,
+        OverlapGroup:new{
+            dimen = rd,
+            TopContainer:new{    dimen = rd, right_top },
+            BottomContainer:new{ dimen = rd, right_bottom },
+        },
+    }
+
+    return HorizontalGroup:new{
+        align = "top",
+        cover_bleed,
+        HorizontalSpan:new{ width = text_padding },
+        right,
     }
 end
 
