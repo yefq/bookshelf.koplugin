@@ -228,7 +228,7 @@ function Bookshelf:addToMainMenu(menu_items)
     -- Stash plugin ref now so _updateSubItems callbacks resolve correctly.
     S._plugin = outer
 
-    menu_items.bookshelf_tab = { icon = "book.opened" }
+    menu_items.bookshelf_tab = { icon = "book.opened", text = _("Bookshelf") }
 
     menu_items.bookshelf_toggle = {
         text_func = function()
