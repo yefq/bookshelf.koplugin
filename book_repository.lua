@@ -309,7 +309,7 @@ function Repo.buildBookMeta(filepath)
         for _i, t in ipairs(cb.tags) do genres[#genres + 1] = t end
     elseif info.keywords and info.keywords ~= "" then
         genres = {}
-        for part in info.keywords:gmatch("[^,;]+") do
+        for part in info.keywords:gmatch("[^,;|]+") do
             local trimmed = part:match("^%s*(.-)%s*$")
             if trimmed and trimmed ~= "" then
                 genres[#genres + 1] = trimmed
