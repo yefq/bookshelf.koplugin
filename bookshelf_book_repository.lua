@@ -417,10 +417,12 @@ local function _buildBookMetaLight(fp)
         title = filename
     end
 
-    -- info (and info.cover_bb) goes out of scope here, making the
-    -- BlitBuffer collectible immediately after each call.
+    -- filename is also returned so callers like searchBooks can include
+    -- it in their search haystack without paying for the heavy
+    -- buildBookMeta path.
     return {
         filepath    = fp,
+        filename    = filename,
         series_name = series_name,
         series_num  = series_num,
         author      = authors and authors[1] or nil,
@@ -904,7 +906,13 @@ function Repo.getAll(path, limit, offset)
                 -- pcall: a single corrupt BIM row must not abort the
                 -- whole prefetch sweep — fall back to filename for the
                 -- failing entry and keep going.
-                local ok, info = pcall(bim.getBookInfo, bim, e.fp, true)
+                -- get_cover=false: this loop reads only info.title, so
+                -- skip the zstd decompression + Blitbuffer allocation
+                -- BIM would otherwise do for every cover. On a 2000-book
+                -- library that's 2000 unnecessary covers held in C
+                -- memory simultaneously, enough to OOM-kill KOReader on
+                -- Kindle Color before the loop completes.
+                local ok, info = pcall(bim.getBookInfo, bim, e.fp, false)
                 if ok and info then
                     e.doc_props = { display_title = info.title or e.name }
                 else
@@ -1105,7 +1113,12 @@ function Repo.searchBooks(query, limit)
     if #words == 0 then return {} end
     local out = {}
     for _, c in ipairs(cands) do
-        local b = Repo.buildBookMeta(c.fp)
+        -- _buildBookMetaLight rather than buildBookMeta: search compares
+        -- text fields only, no covers required. On a 2000-book library
+        -- the heavy variant would zstd-decompress + allocate a Blitbuffer
+        -- for every candidate before filtering, OOM-killing KOReader on
+        -- Kindle Color long before the matches are computed.
+        local b = _buildBookMetaLight(c.fp)
         if b then
             -- Build a single haystack string from every searchable field
             -- so the match is one find() per word rather than per field.
