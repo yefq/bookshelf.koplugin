@@ -458,11 +458,12 @@ function BookshelfWidget:_rebuild()
     local hero_cover_w_natural = math.floor(content_w * 0.30)
     local hero_cover_h_natural = math.floor(hero_cover_w_natural * 1.5)
 
-    -- Natural shelf row dimensions: 4 covers fill content_w with PAD gaps,
-    -- preserving the 2:3 cover aspect ratio. Used in BOTH modes so cover
-    -- size doesn't shift between expanded / collapsed — the hero is the
-    -- only element that flexes. Pagination y stays fixed.
-    local slot_w_natural = math.floor((content_w - PAD * 3) / 4)
+    -- Natural shelf row dimensions: n_cols covers fill content_w with PAD
+    -- gaps, preserving the 2:3 cover aspect ratio. Used in BOTH modes so
+    -- cover size doesn't shift between expanded / collapsed — the hero is
+    -- the only element that flexes. Pagination y stays fixed.
+    local n_cols         = self:_nCols()
+    local slot_w_natural = math.floor((content_w - PAD * (n_cols - 1)) / n_cols)
     local slot_h_natural = math.floor(slot_w_natural * 1.5)
 
     -- Vertical layout (outer-top to outer-bottom):
@@ -822,8 +823,7 @@ function BookshelfWidget:_rebuild()
 
     -- Kick off BIM extraction for any displayed books with no cached
     -- metadata. Cover-spec dims = single shelf slot.
-    local n_slots = 4
-    local slot_w  = math.floor((content_w - PAD * (n_slots - 1)) / n_slots)
+    local slot_w  = math.floor((content_w - PAD * (n_cols - 1)) / n_cols)
     local slot_h  = math.floor(slot_w * 1.5)
     self:_kickOffMissingMetaExtraction(items, slot_w, slot_h, hero_cover_w, hero_cover_h)
 
@@ -1942,7 +1942,7 @@ function BookshelfWidget:_swapShelvesInPlace()
     -- Kick off BIM extraction for newly-paginated books that aren't
     -- cached yet. Same slot + hero dims as _rebuild's call so both
     -- consumers get a single cached cover sized for the bigger of the two.
-    local n_slots = 4
+    local n_slots = self:_nCols()
     local slot_w  = math.floor((d.content_w - d.PAD * (n_slots - 1)) / n_slots)
     local slot_h  = math.floor(slot_w * 1.5)
     self:_kickOffMissingMetaExtraction(items, slot_w, slot_h, d.hero_cover_w, d.hero_cover_h)
