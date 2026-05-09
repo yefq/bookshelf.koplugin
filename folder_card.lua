@@ -18,13 +18,45 @@
 -- adds layers without buying anything.
 
 local FrameContainer = require("ui/widget/container/framecontainer")
-local TextWidget     = require("ui/widget/textwidget")
+local TextBoxWidget  = require("ui/widget/textboxwidget")
 local Widget         = require("ui/widget/widget")
 local Geom           = require("ui/geometry")
 local Size           = require("ui/size")
 local Font           = require("ui/font")
 local Blitbuffer     = require("ffi/blitbuffer")
 local Screen         = require("device").screen
+
+-- CardboardTextBox: TextBoxWidget subclass whose paintTo composites a CARDBOARD
+-- background into the target bb using only standard blitbuffer primitives.
+--
+-- TextBoxWidget._bb is always initialised white before glyphs are rendered
+-- into it; on KOReader builds where bgcolor is silently ignored, blitting
+-- that _bb covers any parent-painted CARDBOARD with a white rectangle.
+--
+-- Algorithm (invert → saturating-add → invert):
+--   1. Fill target area with CARDBOARD; invert → inverted-CARDBOARD.
+--   2. Invert _bb: white-bg→black, black-text→white.
+--   3. addblitFrom: black-bg + inv-CARDBOARD = inv-CARDBOARD (unchanged);
+--                   white-text + inv-CARDBOARD = saturates to 0xFF.
+--   4. Restore _bb (invert back).
+--   5. Invert target: inv-CARDBOARD→CARDBOARD (bg), 0xFF→0x00 (black text).
+--
+-- No Lua pixel loops; works on both greyscale and colour targets.
+local CardboardTextBox = TextBoxWidget:extend{}
+function CardboardTextBox:paintTo(bb, x, y)
+    if not self._bb then
+        TextBoxWidget.paintTo(self, bb, x, y)
+        return
+    end
+    local w = self._bb:getWidth()
+    local h = self._bb:getHeight()
+    bb:paintRectRGB32(x, y, w, h, CARDBOARD)
+    bb:invertRect(x, y, w, h)
+    self._bb:invertRect(0, 0, w, h)
+    bb:addblitFrom(self._bb, x, y, 0, 0, w, h)
+    self._bb:invertRect(0, 0, w, h)
+    bb:invertRect(x, y, w, h)
+end
 
 local FolderCard = {}
 
@@ -200,25 +232,28 @@ function FolderCard.build(opts)
     local label_pad     = Size.padding.large
     local label_w_avail = card_w - label_pad * 2
 
-    -- Probe line height for tab sizing.
-    local line_probe = TextWidget:new{ text = "Mg", face = face, bold = true }
+    -- Probe a single ascii line to derive actual rendered line height.
+    -- Tab height is half this; body fits up to 2 lines.
+    local line_probe = TextBoxWidget:new{
+        text  = "Mg",
+        face  = face,
+        bold  = true,
+        width = label_w_avail,
+    }
     local line_h = line_probe:getSize().h
     line_probe:free()
 
-    -- TextWidget (single-line + ellipsis) replaces TextBoxWidget for the label.
-    -- TextBoxWidget renders to an intermediate _bb initialised to white; on
-    -- KOReader builds where bgcolor is silently ignored, blitting that _bb
-    -- covers the parent FrameContainer CARDBOARD with white. TextWidget
-    -- renders glyph pixels directly to the target bb — the FrameContainer
-    -- background shows through in non-glyph areas on all builds.
-    local label_widget = TextWidget:new{
-        text      = label_text,
-        face      = face,
-        bold      = true,
-        fgcolor   = Blitbuffer.COLOR_BLACK,
-        max_width = label_w_avail,
+    local body_inner_max = 2 * line_h
+    local probe = TextBoxWidget:new{
+        text  = label_text,
+        face  = face,
+        bold  = true,
+        width = label_w_avail,
     }
-    local label_h = label_widget:getSize().h
+    local content_h = probe:getSize().h
+    probe:free()
+    local fits    = content_h <= body_inner_max
+    local label_h = fits and content_h or body_inner_max
 
     local tab_h = math.max(1, math.floor(line_h / 2))
     local tab_w = math.floor(card_w * TAB_WIDTH_FRAC)
@@ -245,18 +280,23 @@ function FolderCard.build(opts)
         folder,
     }
 
-    local label_bg = FrameContainer:new{
-        bordersize = 0,
-        padding    = 0,
-        background = CARDBOARD,
-        label_widget,
+    local label_widget = CardboardTextBox:new{
+        text                          = label_text,
+        face                          = face,
+        bold                          = true,
+        fgcolor                       = Blitbuffer.COLOR_BLACK,
+        bgcolor                       = CARDBOARD,
+        width                         = label_w_avail,
+        alignment                     = "left",
+        height                        = label_h,
+        height_overflow_show_ellipsis = not fits,
     }
     local label_positioned = FrameContainer:new{
         bordersize   = 0,
         padding      = 0,
         padding_top  = v_offset + tab_h + label_pad,
         padding_left = label_pad,
-        label_bg,
+        label_widget,
     }
 
     return folder_positioned, label_positioned
