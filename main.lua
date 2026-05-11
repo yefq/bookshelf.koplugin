@@ -590,10 +590,19 @@ function Bookshelf:onCloseDocument()
     end
 
     -- Only re-show Bookshelf if the user is actually returning to "home"
-    -- — not if the Reader is closing this document only to immediately open
-    -- another. self.ui.document is still set in the latter case.
+    -- — not if the Reader is closing this document only to immediately
+    -- open another. ReaderUI sets tearing_down=true (readerui.lua:588)
+    -- when it's about to be replaced by a new ReaderUI; on a real home
+    -- transition (folder tab, "File browser" end-of-doc action) it stays
+    -- false, which is exactly the case where we want to show.
+    --
+    -- (The previous gate here was "self.ui.document is still set" — but
+    -- the CloseDocument event fires inside ReaderUI:onClose *before*
+    -- closeDocument() nils self.document, so that check always returned
+    -- early and the nextTick(show) below never fired. The result was an
+    -- FM flash whenever bookshelf wasn't already on the stack.)
     if G_reader_settings:readSetting("start_with") ~= "bookshelf" then return end
-    if self.ui and self.ui.document then return end
+    if self.ui and self.ui.tearing_down then return end
     -- If Bookshelf is already on the stack (the typical "open book from
     -- home, close back to home" flow now that _openBook leaves it there),
     -- self:show()'s refresh path handles the repaint without ever exposing
