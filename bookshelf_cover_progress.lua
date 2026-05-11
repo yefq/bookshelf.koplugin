@@ -109,4 +109,38 @@ function M.buildGlyphWidget(glyph_char, size, colour)
     }
 end
 
+-- ---------------------------------------------------------------------------
+-- Resolved-settings accessor
+-- ---------------------------------------------------------------------------
+
+local Colour   = require("bookshelf_colour")
+local Device   = require("device")
+
+local DEFAULT_FILL  = { grey = 0x40 }
+local DEFAULT_TRACK = { grey = 0xBF }
+
+-- Returns colour values resolved to Blitbuffer objects for the current
+-- screen mode. Called per cover paint; relies on bookshelf_colour's
+-- internal hex cache to keep the work cheap.
+function M.resolvedColours()
+    local is_colour = Device.screen:isColorEnabled()
+    local fill_raw  = G_reader_settings:readSetting("bookshelf_progress_fill")  or DEFAULT_FILL
+    local track_raw = G_reader_settings:readSetting("bookshelf_progress_track") or DEFAULT_TRACK
+    return {
+        fill  = Colour.parseColorValue(fill_raw,  is_colour),
+        track = Colour.parseColorValue(track_raw, is_colour),
+    }
+end
+
+-- Returns the raw setting values (storage shape, not Blitbuffer). For the
+-- settings menu's "currently set to..." label rendering.
+function M.rawColours()
+    return {
+        fill  = G_reader_settings:readSetting("bookshelf_progress_fill")  or DEFAULT_FILL,
+        track = G_reader_settings:readSetting("bookshelf_progress_track") or DEFAULT_TRACK,
+        fill_default  = DEFAULT_FILL,
+        track_default = DEFAULT_TRACK,
+    }
+end
+
 return M

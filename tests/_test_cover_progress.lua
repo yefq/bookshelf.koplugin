@@ -43,6 +43,16 @@ package.preload["ui/geometry"] = function()
     }
 end
 
+package.preload["ffi/blitbuffer"] = function()
+    return {
+        Color8     = function(n) return { _kind = "Color8", v = n } end,
+        ColorRGB32 = function(r,g,b,a) return { _kind = "ColorRGB32", r=r, g=g, b=b, a=a } end,
+    }
+end
+package.preload["device"] = function()
+    return { screen = { isColorEnabled = function() return false end } }
+end
+
 -- Master toggle: stub G_reader_settings so the toggle can be set per test.
 local _settings = {}
 _G.G_reader_settings = {
