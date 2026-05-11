@@ -47,6 +47,35 @@ local Bookshelf = WidgetContainer:extend{
 local _live_widget = nil
 
 -- ---------------------------------------------------------------------------
+-- Reader-return tracing (temporary). Enable to log every step of the
+-- reader→bookshelf transition into KOReader's main log. grep for
+-- "[bookshelf-trace]" in /mnt/us/koreader/crash.log to read the flow.
+-- ---------------------------------------------------------------------------
+local TRACE = true
+local function trace(msg, ...)
+    if not TRACE then return end
+    local extra = select("#", ...) > 0 and (" " .. table.concat({...}, " ")) or ""
+    logger.warn("[bookshelf-trace] " .. tostring(msg) .. extra)
+end
+local function _hostKind(plugin)
+    if not plugin or not plugin.ui then return "no-ui" end
+    if plugin.ui.document then return "reader" end
+    return "fm-or-other"
+end
+local function _stackSummary()
+    local s = UIManager._window_stack
+    if type(s) ~= "table" then return "?" end
+    local parts = { string.format("n=%d", #s) }
+    for i, win in ipairs(s) do
+        local w = win.widget
+        local name = w and (w.name or (w.id and tostring(w.id))
+            or tostring(w):match("table: (.+)")) or "?"
+        parts[#parts + 1] = string.format("[%d]=%s", i, name)
+    end
+    return table.concat(parts, " ")
+end
+
+-- ---------------------------------------------------------------------------
 -- init
 -- ---------------------------------------------------------------------------
 
@@ -77,6 +106,10 @@ function Bookshelf:init()
     -- One silent background check per init when the user's opted in.
     self:backgroundUpdateCheck()
 
+    trace("init", "host=" .. _hostKind(self),
+        "start_with=" .. tostring(G_reader_settings:readSetting("start_with")),
+        "live_widget=" .. tostring(_live_widget ~= nil),
+        "stack=" .. _stackSummary())
     -- Takeover: if start_with=bookshelf and we're in the FileManager context
     -- (no document currently being opened), close FM and present Bookshelf.
     if G_reader_settings:readSetting("start_with") == "bookshelf"
@@ -86,7 +119,12 @@ function Bookshelf:init()
         -- could see different state.
         local FileManager = require("apps/filemanager/filemanager")
         local fm_instance = FileManager.instance
-        UIManager:nextTick(function() self:_takeOver(fm_instance) end)
+        trace("init: scheduling _takeOver",
+            "fm_instance=" .. tostring(fm_instance ~= nil))
+        UIManager:nextTick(function()
+            trace("init: _takeOver nextTick firing")
+            self:_takeOver(fm_instance)
+        end)
     end
 end
 
@@ -339,6 +377,31 @@ end
 -- across the plugin's lifetime so opening a book and closing it doesn't
 -- require destroying + recreating + flashing the FileManager underneath.
 function Bookshelf:show()
+    trace("show: enter", "host=" .. _hostKind(self),
+        "self._widget=" .. tostring(self._widget ~= nil),
+        "_live_widget=" .. tostring(_live_widget ~= nil),
+        "stack=" .. _stackSummary())
+    -- Idempotency: if a bookshelf widget already exists on the UIManager
+    -- stack (created by some other plugin instance — a fresh
+    -- bookshelf_fm:init + _takeOver after a reader-return, say — at the
+    -- same time onCloseDocument's nextTick(show) was already scheduled),
+    -- adopt it instead of creating a second one on top. Two widgets in
+    -- the stack would let "Close Bookshelf" remove just the topmost,
+    -- leaving its twin visible and fully interactive underneath.
+    if not self._widget and _live_widget
+            and UIManager:isWidgetShown(_live_widget) then
+        trace("show: adopting existing _live_widget")
+        self._widget = _live_widget
+        -- Rebind the close callback so closing the adopted widget clears
+        -- state on THIS plugin instance too (the original callback was
+        -- bound to a plugin instance that may now be gone).
+        local outer = self
+        local widget_instance = _live_widget
+        self._widget._on_close_callback = function()
+            outer._widget = nil
+            if _live_widget == widget_instance then _live_widget = nil end
+        end
+    end
     if self._widget then
         -- Already on the stack (probably underneath the Reader). Refresh data
         -- and request a repaint so freshly-closed books surface in Recent etc.
@@ -359,9 +422,11 @@ function Bookshelf:show()
         -- softRefresh splits the warm-path update so the existing tree
         -- paints immediately and the heavier shelf re-sort runs ~150ms
         -- later — much snappier than the previous full _rebuild() inline.
+        trace("show: warm path → softRefresh")
         self._widget:softRefresh()
         return
     end
+    trace("show: cold path → create widget")
     local BookshelfWidget = require("bookshelf_widget")
     self._widget = BookshelfWidget:new{}
     -- Clear our reference if the widget is dismissed for any reason, so a
@@ -373,6 +438,7 @@ function Bookshelf:show()
         if _live_widget == widget_instance then _live_widget = nil end
     end
     _live_widget = self._widget
+    trace("show: UIManager:show about to fire", "stack=" .. _stackSummary())
     -- Pass "ui" so UIManager:show enqueues a full-screen refresh alongside
     -- our paint. Without it, setDirty(widget, nil) marks us dirty but
     -- _refresh(nil) is a no-op, and any small-region refreshes already in
@@ -385,6 +451,7 @@ function Bookshelf:show()
     -- existing-widget path below already uses setDirty(..., "ui"); this
     -- keeps the fresh-create path consistent. (Issue #18.)
     UIManager:show(self._widget, "ui")
+    trace("show: UIManager:show fired", "stack=" .. _stackSummary())
 end
 
 -- ---------------------------------------------------------------------------
@@ -456,25 +523,35 @@ end
 --
 --   3. No reader context (we're in FM or pre-host): just call show().
 function Bookshelf:_safeShow()
+    trace("_safeShow: enter", "host=" .. _hostKind(self),
+        "_isShowing=" .. tostring(self:_isShowing()))
     if self.ui and self.ui.document and self.ui.onHome then
         if self:_isShowing() and self.ui.onClose then
+            trace("_safeShow: fast path → onClose(false)")
             self.ui:onClose(false)
             -- onCloseWidget's deferred-close check (below) keeps the
             -- widget alive across the reader→home transition, so by
             -- nextTick self._widget is still the live one and show()
             -- hits the warm softRefresh path.
             UIManager:nextTick(function()
+                trace("_safeShow fast: post-onClose nextTick",
+                    "self._widget=" .. tostring(self._widget ~= nil))
                 if self._widget then self:show() end
             end)
         else
+            trace("_safeShow: slow path → onHome")
             self.ui:onHome()
             -- onCloseDocument fires synchronously inside onHome → FM is
             -- foreground. We schedule bookshelf for the next tick so FM's
             -- creation/show completes first, leaving FM as the painting
             -- surface beneath the bookshelf overlay.
-            UIManager:nextTick(function() self:show() end)
+            UIManager:nextTick(function()
+                trace("_safeShow slow: post-onHome nextTick")
+                self:show()
+            end)
         end
     else
+        trace("_safeShow: no-reader-context → show()")
         self:show()
     end
 end
@@ -517,6 +594,9 @@ function Bookshelf:_takeOver(fm_instance)
     -- (We keep `fm_instance` in the signature for diagnostic use only —
     -- closing it is now intentional dead code.)
     local _ = fm_instance
+    trace("_takeOver: enter", "self._widget=" .. tostring(self._widget ~= nil),
+        "_live_widget=" .. tostring(_live_widget ~= nil),
+        "stack=" .. _stackSummary())
     self:show()
 end
 
@@ -529,49 +609,41 @@ end
 -- so when the user picks Exit, the host (FM or Reader) is removed but the
 -- overlay remains and the loop keeps running. (Issue #15.)
 --
--- We disambiguate FM↔Reader transitions via `tearing_down`: KOReader sets it
--- on the host that's transitioning to the other (filemanager.lua:837,
--- readerui.lua:588). But the Reader→Home path (folder-tab in the reader
--- menu, or ReaderStatus:openFileBrowser) doesn't set tearing_down — it
--- calls ReaderUI:onClose() directly and then ReaderUI:showFileManager()
--- after onClose returns. So at onCloseWidget time we can't tell yet whether
--- the next host will be FM (transition, keep widget) or nothing (exit,
--- close widget for clean quit).
---
--- We defer the close decision by one UIManager tick. By the time the
--- deferred check runs, showFileManager (if any) has fired and we can
--- look at FileManager.instance: alive → transition, keep the widget; gone
--- → exit, close it. Until then the widget paints normally on top of FM
--- (it never left the stack), so the user sees bookshelf throughout the
--- transition instead of FileManager briefly flashing through.
+-- We disambiguate exit from FM↔Reader transitions via `tearing_down`:
+-- KOReader sets it on the host that's transitioning to the other
+-- (filemanager.lua:837, readerui.lua:588) but not on a real exit. The
+-- Reader→Home path (folder tab) doesn't set it either, but that's fine:
+-- onCloseDocument schedules a nextTick(show) for that case and show()'s
+-- idempotency check adopts whatever live widget already exists. So
+-- closing the widget here is safe — either a fresh one comes back on
+-- the next tick, or the stack drains and KOReader exits.
 function Bookshelf:onCloseWidget()
-    if not _live_widget then return end
-    if self.ui and self.ui.tearing_down then return end
-    if not UIManager:isWidgetShown(_live_widget) then return end
-    local kept_widget = _live_widget
-    UIManager:nextTick(function()
-        if not UIManager:isWidgetShown(kept_widget) then return end
-        local ok, FileManager = pcall(require, "apps/filemanager/filemanager")
-        if ok and FileManager and FileManager.instance
-                and UIManager:isWidgetShown(FileManager.instance) then
-            -- Transitioning to FM. Soft-refresh so the kept-alive widget
-            -- picks up the just-closed book's new progress / read time.
-            -- (onCloseDocument's own re-show schedule returns early when
-            -- self.ui.document is still set, which it is during the
-            -- CloseDocument event dispatch — so we trigger the refresh
-            -- ourselves here, with the document already nil.)
-            if kept_widget.softRefresh then
-                kept_widget:softRefresh()
-            else
-                UIManager:setDirty(kept_widget, "ui")
-            end
-            return
-        end
-        UIManager:close(kept_widget)
-    end)
+    trace("onCloseWidget: enter", "host=" .. _hostKind(self),
+        "_live_widget=" .. tostring(_live_widget ~= nil),
+        "tearing_down=" .. tostring(self.ui and self.ui.tearing_down))
+    if not _live_widget then
+        trace("onCloseWidget: skip (no live widget)")
+        return
+    end
+    if self.ui and self.ui.tearing_down then
+        trace("onCloseWidget: skip (tearing_down=true)")
+        return
+    end
+    if not UIManager:isWidgetShown(_live_widget) then
+        trace("onCloseWidget: skip (widget not in stack)")
+        return
+    end
+    trace("onCloseWidget: closing widget")
+    UIManager:close(_live_widget)
 end
 
 function Bookshelf:onCloseDocument()
+    trace("onCloseDocument: enter", "host=" .. _hostKind(self),
+        "doc=" .. tostring(self.ui and self.ui.document and self.ui.document.file),
+        "tearing_down=" .. tostring(self.ui and self.ui.tearing_down),
+        "start_with=" .. tostring(G_reader_settings:readSetting("start_with")),
+        "_live_widget=" .. tostring(_live_widget ~= nil),
+        "stack=" .. _stackSummary())
     -- The walk cache has a 30s TTL; sideloaded / moved / mtime-changed files
     -- surface within that window without an explicit invalidate. Skipping
     -- invalidation here avoids re-walking the entire library + per-candidate
@@ -601,14 +673,25 @@ function Bookshelf:onCloseDocument()
     -- closeDocument() nils self.document, so that check always returned
     -- early and the nextTick(show) below never fired. The result was an
     -- FM flash whenever bookshelf wasn't already on the stack.)
-    if G_reader_settings:readSetting("start_with") ~= "bookshelf" then return end
-    if self.ui and self.ui.tearing_down then return end
+    if G_reader_settings:readSetting("start_with") ~= "bookshelf" then
+        trace("onCloseDocument: skip (start_with != bookshelf)")
+        return
+    end
+    if self.ui and self.ui.tearing_down then
+        trace("onCloseDocument: skip (tearing_down — opening another doc)")
+        return
+    end
     -- If Bookshelf is already on the stack (the typical "open book from
     -- home, close back to home" flow now that _openBook leaves it there),
     -- self:show()'s refresh path handles the repaint without ever exposing
     -- FileManager. Fresh boot path through onCloseDocument (rare) creates
     -- a new instance.
-    UIManager:nextTick(function() self:show() end)
+    trace("onCloseDocument: scheduling nextTick(show)")
+    UIManager:nextTick(function()
+        trace("onCloseDocument: nextTick(show) firing",
+            "stack=" .. _stackSummary())
+        self:show()
+    end)
 end
 
 -- ---------------------------------------------------------------------------

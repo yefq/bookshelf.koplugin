@@ -2051,15 +2051,19 @@ function BookshelfWidget:softRefresh()
     local has_live_tree =
         self._inner_vgroup and self._shelf_dims
         and self._hero_parent and self._hero_dims
+    logger.warn("[bookshelf-trace] softRefresh: enter has_live_tree="
+        .. tostring(has_live_tree) .. " nShelves=" .. tostring(self:_nShelves()))
     -- Two-shelf gate: _swapShelvesInPlace's own fast-path bailout. Falling
     -- back to _rebuild here is cheaper than triggering it from the deferred
     -- callback after we've already painted a stale tree.
     if not has_live_tree or self:_nShelves() ~= 2 then
+        logger.warn("[bookshelf-trace] softRefresh: fallback to _rebuild")
         self:_rebuild()
         if self._startStatusTimer then self:_startStatusTimer() end
         UIManager:setDirty(self, "ui")
         return
     end
+    logger.warn("[bookshelf-trace] softRefresh: fast path (hero swap + deferred shelves)")
     -- Hero now: the current book's progress / last-read time / cover
     -- almost always changed during the reader session, and the swap is
     -- cheap (one HeroCard build, no fetch).
