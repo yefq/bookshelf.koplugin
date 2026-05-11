@@ -61,14 +61,18 @@ package.preload["device"] = function()
     return { screen = { isColorEnabled = function() return false end } }
 end
 
--- Master toggle: stub G_reader_settings so the toggle can be set per test.
+-- Per-element toggles: stub G_reader_settings so each can be set per test.
 local _settings = {}
 _G.G_reader_settings = {
     readSetting = function(_, key) return _settings[key] end,
     isTrue      = function(_, key) return _settings[key] == true end,
     isFalse     = function(_, key) return _settings[key] == false end,
 }
-local function setEnabled(b) _settings.bookshelf_progress_enabled = b end
+local function setAll(v)
+    _settings.bookshelf_progress_bar_enabled      = v
+    _settings.bookshelf_progress_bookmark_enabled = v
+    _settings.bookshelf_progress_badge_enabled    = v
+end
 
 local CP = require("bookshelf_cover_progress")
 
@@ -91,10 +95,10 @@ local function book(status, pct)
     return { status = status, book_pct = pct }
 end
 
--- Master toggle ---------------------------------------------------------------
+-- All toggles off -------------------------------------------------------------
 
-test("decide: master OFF returns no indicators regardless of status", function()
-    setEnabled(false)
+test("decide: all toggles OFF returns no indicators regardless of status", function()
+    setAll(false)
     local r = CP.decide(book("reading", 0.5))
     eq(r.bar, false)
     eq(r.glyph, nil)
@@ -103,7 +107,7 @@ end)
 -- Status: reading -------------------------------------------------------------
 
 test("decide: reading with pct=0.5 shows bar at 0.5 and in_progress glyph", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book("reading", 0.5))
     eq(r.bar, true)
     eq(r.bar_pct, 0.5)
@@ -111,14 +115,14 @@ test("decide: reading with pct=0.5 shows bar at 0.5 and in_progress glyph", func
 end)
 
 test("decide: reading with pct=nil hides bar but shows in_progress glyph", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book("reading", nil))
     eq(r.bar, false)
     eq(r.glyph, "in_progress")
 end)
 
 test("decide: reading with pct=1 still shows in_progress glyph (status wins)", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book("reading", 1.0))
     eq(r.bar, true)
     eq(r.bar_pct, 1.0)
@@ -128,14 +132,14 @@ end)
 -- Status: complete ------------------------------------------------------------
 
 test("decide: complete hides bar regardless of pct, shows complete glyph", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book("complete", 0.42))
     eq(r.bar, false)
     eq(r.glyph, "complete")
 end)
 
 test("decide: complete with pct=1 hides bar (no redundant 100% bar)", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book("complete", 1.0))
     eq(r.bar, false)
     eq(r.glyph, "complete")
@@ -144,7 +148,7 @@ end)
 -- Status: abandoned -----------------------------------------------------------
 
 test("decide: abandoned looks like reading (bar + in_progress glyph)", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book("abandoned", 0.3))
     eq(r.bar, true)
     eq(r.bar_pct, 0.3)
@@ -154,33 +158,61 @@ end)
 -- Status: new / nil -----------------------------------------------------------
 
 test("decide: status=new shows nothing", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book("new", nil))
     eq(r.bar, false)
     eq(r.glyph, nil)
 end)
 
 test("decide: nil status shows nothing", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(book(nil, nil))
     eq(r.bar, false)
     eq(r.glyph, nil)
 end)
 
 test("decide: nil book shows nothing (defensive)", function()
-    setEnabled(true)
+    setAll(true)
     local r = CP.decide(nil)
     eq(r.bar, false)
     eq(r.glyph, nil)
 end)
 
--- Default toggle --------------------------------------------------------------
+-- Default toggle (each defaults true when unset) ------------------------------
 
-test("decide: master toggle defaults to true when key absent", function()
-    _settings.bookshelf_progress_enabled = nil
+test("decide: toggles default to true when key absent", function()
+    _settings.bookshelf_progress_bar_enabled      = nil
+    _settings.bookshelf_progress_bookmark_enabled = nil
+    _settings.bookshelf_progress_badge_enabled    = nil
     local r = CP.decide(book("reading", 0.5))
     eq(r.bar, true)
     eq(r.glyph, "in_progress")
+end)
+
+-- Per-element independence ----------------------------------------------------
+
+test("decide: bar disabled alone -> still shows in-progress glyph", function()
+    setAll(true)
+    _settings.bookshelf_progress_bar_enabled = false
+    local r = CP.decide(book("reading", 0.5))
+    eq(r.bar, false)
+    eq(r.glyph, "in_progress")
+end)
+
+test("decide: bookmark disabled alone -> still shows bar", function()
+    setAll(true)
+    _settings.bookshelf_progress_bookmark_enabled = false
+    local r = CP.decide(book("reading", 0.5))
+    eq(r.bar, true)
+    eq(r.glyph, nil)
+end)
+
+test("decide: badge disabled alone -> complete book shows nothing", function()
+    setAll(true)
+    _settings.bookshelf_progress_badge_enabled = false
+    local r = CP.decide(book("complete", 1.0))
+    eq(r.bar, false)
+    eq(r.glyph, nil)
 end)
 
 -- Report ---------------------------------------------------------------------

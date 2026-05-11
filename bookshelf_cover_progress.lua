@@ -16,9 +16,13 @@ local M = {}
 M.GLYPH_BOOKMARK       = "\u{e7bf}"  -- in-progress
 M.GLYPH_BOOKMARK_CHECK = "\u{e7c0}"  -- finished
 
--- Read the master toggle. Default true (feature on) when unset.
-local function _enabled()
-    local v = G_reader_settings:readSetting("bookshelf_progress_enabled")
+-- Read a per-element toggle. All three default ON (true) when unset.
+-- Setting keys:
+--   bookshelf_progress_bar_enabled       -- the rounded pill at cover bottom
+--   bookshelf_progress_bookmark_enabled  -- the in-progress glyph
+--   bookshelf_progress_badge_enabled     -- the complete (badged) glyph
+local function _toggle(key)
+    local v = G_reader_settings:readSetting(key)
     if v == nil then return true end
     return v == true
 end
@@ -30,13 +34,13 @@ end
 local _Repo
 
 -- Pure decision with a lazy filepath-based fallback for status/pct.
+-- Each output element is independently gated by its own toggle.
 -- @param book table|nil with keys `status` (string|nil), `book_pct` (number|nil)
 --             and optionally `filepath` (string|nil)
 -- @return table { bar=bool, bar_pct=number, glyph="in_progress"|"complete"|nil }
 function M.decide(book)
     local none = { bar = false, bar_pct = 0, glyph = nil }
-    if not _enabled()  then return none end
-    if not book        then return none end
+    if not book then return none end
     local status = book.status
     local pct    = book.book_pct
     -- Most shelf chips (getRecent, getLatest, getAll, ...) use the
@@ -49,14 +53,23 @@ function M.decide(book)
         pct    = pct or p
         status = s
     end
-    if status == "reading" then
-        return { bar = (pct ~= nil), bar_pct = pct or 0, glyph = "in_progress" }
+    local want_bar      = _toggle("bookshelf_progress_bar_enabled")
+    local want_bookmark = _toggle("bookshelf_progress_bookmark_enabled")
+    local want_badge    = _toggle("bookshelf_progress_badge_enabled")
+    if status == "reading" or status == "abandoned" then
+        return {
+            bar     = want_bar and (pct ~= nil),
+            bar_pct = pct or 0,
+            glyph   = want_bookmark and "in_progress" or nil,
+        }
     elseif status == "complete" then
-        return { bar = false, bar_pct = 0, glyph = "complete" }
-    elseif status == "abandoned" then
-        return { bar = (pct ~= nil), bar_pct = pct or 0, glyph = "in_progress" }
+        return {
+            bar     = false,
+            bar_pct = 0,
+            glyph   = want_badge and "complete" or nil,
+        }
     end
-    -- status = "new" or nil: nothing.
+    -- status = "new" or nil: nothing regardless of toggles.
     return none
 end
 
