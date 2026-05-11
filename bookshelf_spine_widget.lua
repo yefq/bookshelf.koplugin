@@ -376,22 +376,26 @@ function SpineWidget:_renderShadowedCard(inner)
     -- 3. Inner card (image or fallback) at (0,0)
     children[#children + 1] = inner
 
-    -- 4. Finished glyph (IN FRONT of inner): top-left of interior, on a
-    --    white rounded badge so the hollow check stays legible against
-    --    busy cover artwork.
+    -- 4. Finished glyph (IN FRONT of inner): SAME position as the in-progress
+    --    glyph (bottom-left, lifted by GLYPH_TOP_LIFT), but white with a
+    --    black halo so the hollow check stays legible against any cover.
     if indicators.glyph == "complete" then
-        local colours = CoverProgress.resolvedColours()
         local glyph_h = _glyphSize(card_w)
         local glyph_w = self:_glyphWidth(glyph_h)
         if glyph_w <= card_w * 0.4 then
-            local badge = CoverProgress.buildBadgedGlyphWidget(
-                CoverProgress.GLYPH_BOOKMARK_CHECK, glyph_h, colours.fill)
+            local halo_w = 1
+            local outlined = CoverProgress.buildOutlinedGlyphWidget(
+                CoverProgress.GLYPH_BOOKMARK_CHECK, glyph_h, halo_w)
+            -- Offset by -halo_w so the glyph's CENTRE aligns with the
+            -- in-progress glyph's position (outlined widget is 2*halo_w
+            -- larger on each axis).
+            local y_offset = card_h - math.floor(glyph_h * GLYPH_TOP_LIFT + 0.5)
             children[#children + 1] = FrameContainer:new{
                 bordersize   = 0,
                 padding      = 0,
-                padding_top  = CARD_BORDER,
-                padding_left = CARD_BORDER + Size.padding.small,
-                badge,
+                padding_top  = y_offset - halo_w,
+                padding_left = Size.padding.small - halo_w,
+                outlined,
             }
         end
     end

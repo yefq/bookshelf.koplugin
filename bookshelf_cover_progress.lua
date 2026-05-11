@@ -147,38 +147,43 @@ function M.buildGlyphWidget(glyph_char, size, colour)
     }
 end
 
--- BadgeBackdrop: solid white rounded rectangle painted behind a glyph
--- so hollow nerd-font shapes (like the bookmark-check, where the tick
--- is transparent) read cleanly against busy cover artwork.
-local BadgeBackdrop = Widget:extend{
-    width  = 0,
-    height = 0,
-    radius = 0,
-}
-function BadgeBackdrop:init()
-    self.dimen = Geom:new{ w = self.width, h = self.height }
-end
-function BadgeBackdrop:paintTo(bb, x, y)
-    bb:paintRoundedRect(x, y, self.width, self.height,
-                        Blitbuffer.COLOR_WHITE, self.radius)
-end
-
--- Build a badged glyph: glyph centred on a white rounded backdrop.
--- Used for the 'completed' indicator. Returns a widget whose getSize
--- is the badge (slightly larger than the glyph).
-function M.buildBadgedGlyphWidget(glyph_char, size, colour)
-    local pad     = math.floor(size * 0.15 + 0.5)
-    local badge_w = size + 2 * pad
-    local badge_h = size + 2 * pad
-    local radius  = math.floor(badge_w * 0.2 + 0.5)
-    return OverlapGroup:new{
-        dimen = Geom:new{ w = badge_w, h = badge_h },
-        BadgeBackdrop:new{ width = badge_w, height = badge_h, radius = radius },
-        CenterContainer:new{
-            dimen = Geom:new{ w = badge_w, h = badge_h },
-            M.buildGlyphWidget(glyph_char, size, colour),
-        },
+-- Build a white-with-black-halo glyph. The glyph is painted in BLACK
+-- at every cell of a (2*halo_w + 1) x (2*halo_w + 1) offset grid
+-- (skipping the centre), then in WHITE at the centre. The offset paints
+-- create the outline; the white centre fills the strokes. Used for the
+-- 'completed' indicator so the bookmark-check stays legible against any
+-- cover artwork without the heavy 'sticker' look of the old badge.
+function M.buildOutlinedGlyphWidget(glyph_char, size, halo_w)
+    halo_w = halo_w or 1
+    local widget_w = size + 2 * halo_w
+    local widget_h = size + 2 * halo_w
+    local FrameContainer = require("ui/widget/container/framecontainer")
+    local group = OverlapGroup:new{
+        dimen = Geom:new{ w = widget_w, h = widget_h },
     }
+    -- Black offsets in all 8 directions around the centre.
+    for dy = -halo_w, halo_w do
+        for dx = -halo_w, halo_w do
+            if dx ~= 0 or dy ~= 0 then
+                group[#group + 1] = FrameContainer:new{
+                    bordersize   = 0,
+                    padding      = 0,
+                    padding_top  = halo_w + dy,
+                    padding_left = halo_w + dx,
+                    M.buildGlyphWidget(glyph_char, size, Blitbuffer.COLOR_BLACK),
+                }
+            end
+        end
+    end
+    -- White centre glyph.
+    group[#group + 1] = FrameContainer:new{
+        bordersize   = 0,
+        padding      = 0,
+        padding_top  = halo_w,
+        padding_left = halo_w,
+        M.buildGlyphWidget(glyph_char, size, Blitbuffer.COLOR_WHITE),
+    }
+    return group
 end
 
 -- ---------------------------------------------------------------------------
