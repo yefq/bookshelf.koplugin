@@ -268,11 +268,10 @@ function Bookshelf:addToMainMenu(menu_items)
             else
                 outer:show()
             end
-            -- Always close the menu after the toggle so the user lands
-            -- on the new state (bookshelf or FM) without a lingering
-            -- menu in front of them. TouchMenu's default close path
-            -- typically does this for items without checked_func, but
-            -- making it explicit avoids relying on that default.
+            -- Close the menu explicitly: TouchMenu's default post-callback
+            -- closeMenu path is reliable for simple items, but being explicit
+            -- here means the toggle behaves the same regardless of which
+            -- internal branch TouchMenu takes for items with text_func.
             if touchmenu_instance and touchmenu_instance.closeMenu then
                 touchmenu_instance:closeMenu()
             end
@@ -363,14 +362,6 @@ end
 -- across the plugin's lifetime so opening a book and closing it doesn't
 -- require destroying + recreating + flashing the FileManager underneath.
 function Bookshelf:show()
-    -- Clear a stale self._widget. A previous show() may have adopted a
-    -- _live_widget from another plugin instance and rebound the close
-    -- callback to the adopter — when the user later closes the widget,
-    -- the rebound callback clears the adopter's _widget, but the original
-    -- owner (likely this plugin instance, on a subsequent show() call
-    -- from its menu) is left with a dangling pointer to the dead widget.
-    -- If we don't clear it here, the warm-path branch below would
-    -- softRefresh a widget that's no longer on the stack.
     if self._widget and not UIManager:isWidgetShown(self._widget) then
         self._widget = nil
     end
