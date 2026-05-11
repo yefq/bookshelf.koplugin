@@ -527,24 +527,30 @@ end
 -- shelves jumping around as the user browsed previews.
 
 function Repo.getRecent(limit, offset)
-    local rh    = getReadHistory()
-    local total = #rh.hist
-    offset      = offset or 0
-    limit       = limit or 8
-    local stop  = math.min(offset + limit, total)
-    local out   = {}
-    -- Shelf path: BIM-only meta is enough (no DocSettings needed).
-    -- Slice via offset/stop so only the visible page pays the
-    -- per-book cover cost. Previously this iterated every entry up to
-    -- `limit` (with limit=400 from MAX_FETCH on the chip strip path),
-    -- so a 50-entry ReadHistory triggered 50 cover decompressions for
-    -- ~8 visible books — visible as a 1s lag on the Recent chip.
-    for i = offset + 1, stop do
+    local rh   = getReadHistory()
+    offset     = offset or 0
+    limit      = limit or 8
+    local out  = {}
+    -- entry.dim is ReadHistory's marker for files deleted via the
+    -- KOReader file manager when autoremove_deleted_items_from_history
+    -- is off (the default). Stock History dims them; bookshelf treats
+    -- them as gone -- if KOReader notices the file is back, the flag
+    -- clears and the entry reappears here naturally.
+    --
+    -- Single pass: count non-dim entries (= total) while fetching
+    -- buildBookMeta only for the visible slice [offset+1, offset+limit].
+    local total = 0
+    for i = 1, #rh.hist do
         local entry = rh.hist[i]
-        local book = Repo.buildBookMeta(entry.file)
-        if book then
-            book.last_read_time = entry.time
-            out[#out + 1] = book
+        if not entry.dim then
+            total = total + 1
+            if total > offset and #out < limit then
+                local book = Repo.buildBookMeta(entry.file)
+                if book then
+                    book.last_read_time = entry.time
+                    out[#out + 1] = book
+                end
+            end
         end
     end
     return out, total
