@@ -46,6 +46,16 @@ local Bookshelf = WidgetContainer:extend{
 -- exit, so the UIManager window stack can drain to zero.
 local _live_widget = nil
 
+-- Close a TouchMenu we received as the first callback argument. Used
+-- whenever a menu callback changes the visible UI layer (e.g. opens or
+-- closes the bookshelf widget, switches start_with) — without this, the
+-- menu lingers above the new layer and can end up orphaned in the stack.
+local function _closeTouchMenu(touchmenu_instance)
+    if touchmenu_instance and touchmenu_instance.closeMenu then
+        touchmenu_instance:closeMenu()
+    end
+end
+
 -- ---------------------------------------------------------------------------
 -- init
 -- ---------------------------------------------------------------------------
@@ -134,16 +144,11 @@ function Bookshelf:_registerStartWithMenu()
                 if orig_cb then orig_cb(touchmenu_instance, ...) end
                 if _live_widget and UIManager:isWidgetShown(_live_widget) then
                     UIManager:close(_live_widget)
-                    -- Close the start_with menu too: the user just
-                    -- chose a different home and expects to land on
-                    -- it immediately. TouchMenu's default
-                    -- post-callback path for radio items calls
-                    -- updateItems() (to repaint the checkmark) rather
-                    -- than closing, so without this the menu lingers
-                    -- on top of the now-hidden bookshelf.
-                    if touchmenu_instance and touchmenu_instance.closeMenu then
-                        touchmenu_instance:closeMenu()
-                    end
+                    -- Close the start_with menu too: the user just chose
+                    -- a different home and expects to land on it. Radio
+                    -- items go through TouchMenu's updateItems() branch
+                    -- (refresh checkmark), not the auto-close branch.
+                    _closeTouchMenu(touchmenu_instance)
                 end
             end
         end
@@ -168,14 +173,10 @@ function Bookshelf:_registerStartWithMenu()
                     -- Close the menu BEFORE showing bookshelf — otherwise
                     -- UIManager:show inserts the new widget above the
                     -- still-open menu_container, leaving the menu hidden
-                    -- but still on the stack. When the user later closes
-                    -- bookshelf, that orphaned menu would be exposed
-                    -- (looking like a "menu stuck open" bug, with FM
-                    -- non-operable beneath it because the orphan absorbs
-                    -- input).
-                    if touchmenu_instance and touchmenu_instance.closeMenu then
-                        touchmenu_instance:closeMenu()
-                    end
+                    -- but still on the stack. The orphan would later be
+                    -- exposed when the user closes bookshelf and absorb
+                    -- input beneath FM.
+                    _closeTouchMenu(touchmenu_instance)
                     -- Show Bookshelf immediately if not already showing.
                     if plugin._isShowing and not plugin:_isShowing() then
                         plugin:show()
@@ -279,13 +280,8 @@ function Bookshelf:addToMainMenu(menu_items)
             else
                 outer:show()
             end
-            -- Close the menu explicitly: TouchMenu's default post-callback
-            -- closeMenu path is reliable for simple items, but being explicit
-            -- here means the toggle behaves the same regardless of which
-            -- internal branch TouchMenu takes for items with text_func.
-            if touchmenu_instance and touchmenu_instance.closeMenu then
-                touchmenu_instance:closeMenu()
-            end
+            -- Always close the menu so the user lands on the new state.
+            _closeTouchMenu(touchmenu_instance)
         end,
         separator = true,
     }
@@ -373,7 +369,11 @@ end
 -- across the plugin's lifetime so opening a book and closing it doesn't
 -- require destroying + recreating + flashing the FileManager underneath.
 function Bookshelf:show()
-    if self._widget and not UIManager:isWidgetShown(self._widget) then
+    -- Discard a stale self._widget without a stack walk. _live_widget
+    -- is the canonical "what's actually on screen" pointer (set/cleared
+    -- in sync with the widget's _on_close_callback), so anything else
+    -- this instance is pointing at can't be the live one.
+    if self._widget and self._widget ~= _live_widget then
         self._widget = nil
     end
     -- Idempotency: if a bookshelf widget already exists on the UIManager
@@ -565,9 +565,8 @@ function Bookshelf:_takeOver(fm_instance)
     -- Bookshelf paints fully opaque (white page bg) over FM, so there's no
     -- visible bleed-through; the only cost is a few hundred KB of FM widget
     -- tree in memory, which is acceptable on every target device.
-    -- (We keep `fm_instance` in the signature for diagnostic use only —
-    -- closing it is now intentional dead code.)
-    local _ = fm_instance
+    -- fm_instance is kept in the signature for diagnostic use only —
+    -- closing it is intentional dead code now.
     self:show()
 end
 
