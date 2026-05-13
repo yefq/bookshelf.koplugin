@@ -516,12 +516,19 @@ function BookshelfWidget:_rebuild()
     -- it follows CHIP_ORDER, future user-driven reordering would
     -- fill the same slot).
     self._active_chip_keys = {}
+    self._dpad_chip_keys   = {}
+    self._action_chip_keys = {}
     for _, c in ipairs(active_chips) do
         -- Exclude action chips from the swipe-cycle ring (search, current
         -- book, …) — they're actions, not navigable tabs.
         if not c.action then
             self._active_chip_keys[#self._active_chip_keys + 1] = c.key
+        else
+            self._action_chip_keys[c.key] = true
         end
+        -- D-pad chip ring includes action chips so the user can reach the
+        -- search button and "currently reading" indicator by keyboard.
+        self._dpad_chip_keys[#self._dpad_chip_keys + 1] = c.key
     end
     self._chip_strip_hidden = hide_chip_strip
 
@@ -1705,42 +1712,44 @@ function BookshelfWidget:_buildPaginationFooter(content_w, label_h, total_pages)
     local function go(p)
         return function() bw.page = p; bw:_swapShelvesInPlace() end
     end
+    -- margin/bordersize swap: every button allocates the same outer footprint
+    -- (margin + bordersize = focus_border) so moving focus never shifts layout.
+    -- Focused: bordersize = focus_border (visible thick ring), margin = 0.
+    -- Unfocused: bordersize = 0 (invisible), margin = focus_border (slack space).
+    local function bm(k) return (focused_btn == k) and 0           or focus_border end
+    local function bs(k) return (focused_btn == k) and focus_border or 0           end
+    local function br(k) return (focused_btn == k) and focus_radius or nil         end
     local first = Button:new{
         icon = "chevron.first", icon_width = chev_size, icon_height = chev_size,
-        callback  = go(1),
-        bordersize = (focused_btn == "first") and focus_border or 0,
-        radius    = (focused_btn == "first") and focus_radius or nil,
-        enabled   = self.page > 1, show_parent = self,
+        callback   = go(1),
+        margin     = bm("first"), bordersize = bs("first"), radius = br("first"),
+        enabled    = self.page > 1, show_parent = self,
     }
     local prev = Button:new{
         icon = "chevron.left",  icon_width = chev_size, icon_height = chev_size,
-        callback  = go(self.page - 1),
-        bordersize = (focused_btn == "prev") and focus_border or 0,
-        radius    = (focused_btn == "prev") and focus_radius or nil,
-        enabled   = self.page > 1, show_parent = self,
+        callback   = go(self.page - 1),
+        margin     = bm("prev"), bordersize = bs("prev"), radius = br("prev"),
+        enabled    = self.page > 1, show_parent = self,
     }
     local page_text = Button:new{
         text = string.format("Page %d of %d", self.page, total_pages),
         text_font_size = 15,
-        callback  = function() bw:_openSortMenu() end,
-        bordersize = (focused_btn == "page") and focus_border or 0,
-        radius    = (focused_btn == "page") and focus_radius or nil,
+        callback   = function() bw:_openSortMenu() end,
+        margin     = bm("page"), bordersize = bs("page"), radius = br("page"),
         show_parent = self,
     }
     self._page_text_button = page_text
     local next_btn = Button:new{
         icon = "chevron.right", icon_width = chev_size, icon_height = chev_size,
-        callback  = go(self.page + 1),
-        bordersize = (focused_btn == "next") and focus_border or 0,
-        radius    = (focused_btn == "next") and focus_radius or nil,
-        enabled   = self.page < total_pages, show_parent = self,
+        callback   = go(self.page + 1),
+        margin     = bm("next"), bordersize = bs("next"), radius = br("next"),
+        enabled    = self.page < total_pages, show_parent = self,
     }
     local last = Button:new{
         icon = "chevron.last", icon_width = chev_size, icon_height = chev_size,
-        callback  = go(total_pages),
-        bordersize = (focused_btn == "last") and focus_border or 0,
-        radius    = (focused_btn == "last") and focus_radius or nil,
-        enabled   = self.page < total_pages, show_parent = self,
+        callback   = go(total_pages),
+        margin     = bm("last"), bordersize = bs("last"), radius = br("last"),
+        enabled    = self.page < total_pages, show_parent = self,
     }
     local nav = HorizontalGroup:new{
         align = "center",
@@ -2575,7 +2584,7 @@ end
 -- Used by D-pad chip-row navigation where the focused key != the active chip.
 -- Returns nil when there's only one (or zero) chips in the active list.
 function BookshelfWidget:_chipKeyNeighbour(key, direction)
-    local keys = self._active_chip_keys
+    local keys = self._dpad_chip_keys or self._active_chip_keys
     if not keys or #keys <= 1 then return nil end
     local idx
     for i, k in ipairs(keys) do
@@ -2646,10 +2655,20 @@ function BookshelfWidget:onBSFocusUp()
         local n_cols = self:_nCols()
         if self._cursor_idx and self._cursor_idx <= n_cols then
             if not self._chip_strip_hidden then
-                self._focus_zone      = "chips"
-                self._chip_cursor_key = self.chip
-                if self._chip_strip and self._chip_strip.focusCursor then
-                    self._chip_strip:focusCursor(self._chip_cursor_key)
+                self._focus_zone = "chips"
+                if #self._drilldown_path > 0 then
+                    local zones = self._chip_strip and self._chip_strip._breadcrumb_zones
+                    if zones and #zones > 0 then
+                        self._crumb_cursor_depth = zones[#zones].depth
+                        if self._chip_strip.focusCrumb then
+                            self._chip_strip:focusCrumb(self._crumb_cursor_depth)
+                        end
+                    end
+                else
+                    self._chip_cursor_key = self.chip
+                    if self._chip_strip and self._chip_strip.focusCursor then
+                        self._chip_strip:focusCursor(self._chip_cursor_key)
+                    end
                 end
             elseif not self._expanded then
                 self._focus_zone = "hero"
@@ -2667,8 +2686,12 @@ function BookshelfWidget:onBSFocusUp()
             if self._chip_strip and self._chip_strip.focusCursor then
                 self._chip_strip:focusCursor(nil)
             end
-            self._chip_cursor_key = nil
-            self._focus_zone      = "hero"
+            if self._chip_strip and self._chip_strip.focusCrumb then
+                self._chip_strip:focusCrumb(nil)
+            end
+            self._chip_cursor_key    = nil
+            self._crumb_cursor_depth = nil
+            self._focus_zone         = "hero"
             self:_swapHeroInPlace()
         end
         return true
@@ -2701,10 +2724,20 @@ function BookshelfWidget:onBSFocusDown()
         self._focus_zone = nil
         self:_swapHeroInPlace()
         if not self._chip_strip_hidden then
-            self._focus_zone      = "chips"
-            self._chip_cursor_key = self.chip
-            if self._chip_strip and self._chip_strip.focusCursor then
-                self._chip_strip:focusCursor(self._chip_cursor_key)
+            self._focus_zone = "chips"
+            if #self._drilldown_path > 0 then
+                local zones = self._chip_strip and self._chip_strip._breadcrumb_zones
+                if zones and #zones > 0 then
+                    self._crumb_cursor_depth = zones[#zones].depth
+                    if self._chip_strip.focusCrumb then
+                        self._chip_strip:focusCrumb(self._crumb_cursor_depth)
+                    end
+                end
+            else
+                self._chip_cursor_key = self.chip
+                if self._chip_strip and self._chip_strip.focusCursor then
+                    self._chip_strip:focusCursor(self._chip_cursor_key)
+                end
             end
         else
             self._focus_zone = "grid"
@@ -2718,9 +2751,13 @@ function BookshelfWidget:onBSFocusDown()
         if self._chip_strip and self._chip_strip.focusCursor then
             self._chip_strip:focusCursor(nil)
         end
-        self._chip_cursor_key = nil
-        self._focus_zone      = "grid"
-        self._cursor_idx      = 1
+        if self._chip_strip and self._chip_strip.focusCrumb then
+            self._chip_strip:focusCrumb(nil)
+        end
+        self._chip_cursor_key    = nil
+        self._crumb_cursor_depth = nil
+        self._focus_zone         = "grid"
+        self._cursor_idx         = 1
         self:_swapShelvesInPlace()
         return true
     end
@@ -2781,6 +2818,22 @@ function BookshelfWidget:onBSFocusLeft()
     end
 
     if self._focus_zone == "chips" then
+        if #self._drilldown_path > 0 then
+            local zones = self._chip_strip and self._chip_strip._breadcrumb_zones
+            if zones then
+                local cur_i
+                for i, z in ipairs(zones) do
+                    if z.depth == self._crumb_cursor_depth then cur_i = i; break end
+                end
+                if cur_i and cur_i > 1 then
+                    self._crumb_cursor_depth = zones[cur_i - 1].depth
+                    if self._chip_strip.focusCrumb then
+                        self._chip_strip:focusCrumb(self._crumb_cursor_depth)
+                    end
+                end
+            end
+            return true
+        end
         local key = self:_chipKeyNeighbour(self._chip_cursor_key, -1)
         if key and key ~= self._chip_cursor_key then
             self._chip_cursor_key = key
@@ -2817,6 +2870,22 @@ function BookshelfWidget:onBSFocusRight()
     end
 
     if self._focus_zone == "chips" then
+        if #self._drilldown_path > 0 then
+            local zones = self._chip_strip and self._chip_strip._breadcrumb_zones
+            if zones then
+                local cur_i
+                for i, z in ipairs(zones) do
+                    if z.depth == self._crumb_cursor_depth then cur_i = i; break end
+                end
+                if cur_i and cur_i < #zones then
+                    self._crumb_cursor_depth = zones[cur_i + 1].depth
+                    if self._chip_strip.focusCrumb then
+                        self._chip_strip:focusCrumb(self._crumb_cursor_depth)
+                    end
+                end
+            end
+            return true
+        end
         local key = self:_chipKeyNeighbour(self._chip_cursor_key, 1)
         if key and key ~= self._chip_cursor_key then
             self._chip_cursor_key = key
@@ -2853,13 +2922,31 @@ function BookshelfWidget:onBSKbPress()
     end
 
     if self._focus_zone == "chips" then
+        if #self._drilldown_path > 0 then
+            -- Breadcrumb mode: fire on_breadcrumb for the focused zone depth.
+            local depth = self._crumb_cursor_depth
+            if depth ~= nil and self._chip_strip and self._chip_strip.on_breadcrumb then
+                self:_clearDpadFocus()
+                self._chip_strip.on_breadcrumb(depth)
+            end
+            return true
+        end
         local key = self._chip_cursor_key
         if key then
-            self:_clearDpadFocus()
-            self:_setActiveChip(key)
-            self._focus_zone = "grid"
-            self._cursor_idx = 1
-            self:_swapShelvesInPlace()
+            if self._action_chip_keys and self._action_chip_keys[key] then
+                -- Action chips (search, currently-reading): dispatch via
+                -- on_change closure, same path as a touch tap.
+                self:_clearDpadFocus()
+                if self._chip_strip and self._chip_strip.on_change then
+                    self._chip_strip.on_change(key)
+                end
+            else
+                self:_clearDpadFocus()
+                self:_setActiveChip(key)
+                self._focus_zone = "grid"
+                self._cursor_idx = 1
+                self:_swapShelvesInPlace()
+            end
         end
         return true
     end
@@ -3192,12 +3279,16 @@ function BookshelfWidget:onBookshelfToggleHero()
 end
 
 function BookshelfWidget:_clearDpadFocus()
-    self._focus_zone        = nil
-    self._cursor_idx        = nil
-    self._chip_cursor_key   = nil
-    self._footer_cursor_btn = nil
+    self._focus_zone         = nil
+    self._cursor_idx         = nil
+    self._chip_cursor_key    = nil
+    self._crumb_cursor_depth = nil
+    self._footer_cursor_btn  = nil
     if self._chip_strip and self._chip_strip.focusCursor then
         self._chip_strip:focusCursor(nil)
+    end
+    if self._chip_strip and self._chip_strip.focusCrumb then
+        self._chip_strip:focusCrumb(nil)
     end
 end
 
