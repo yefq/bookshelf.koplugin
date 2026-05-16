@@ -3,7 +3,7 @@
 msgid ""
 msgstr ""
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-17 00:08+0100\n"
+"POT-Creation-Date: 2026-05-17 00:35+0100\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -109,7 +109,7 @@ msgstr "(ninguno)"
 
 #: lib/bookshelf_chip_editor.lua:368 lib/bookshelf_chip_editor.lua:618
 #: lib/bookshelf_chip_editor.lua:1032 lib/bookshelf_chip_editor.lua:1201
-#: lib/bookshelf_colour_palette.lua:347 lib/bookshelf_hero_line_editor.lua:394
+#: lib/bookshelf_colour_palette.lua:347 lib/bookshelf_hero_line_editor.lua:429
 #: lib/bookshelf_settings.lua:788 lib/bookshelf_settings.lua:880
 #: lib/bookshelf_settings.lua:936 lib/bookshelf_widget.lua:2295
 #: lib/bookshelf_widget.lua:4671 main.lua:966
@@ -181,7 +181,7 @@ msgstr "¿Eliminar este chip? Esto no se puede deshacer."
 msgid "Delete"
 msgstr "Eliminar"
 
-#: lib/bookshelf_chip_editor.lua:643 lib/bookshelf_hero_line_editor.lua:442
+#: lib/bookshelf_chip_editor.lua:643 lib/bookshelf_hero_line_editor.lua:477
 #: main.lua:971
 msgid "Save"
 msgstr "Guardar"
@@ -320,7 +320,7 @@ msgid "Chip icon"
 msgstr "Icono del chip"
 
 #: lib/bookshelf_colour_palette.lua:349 lib/bookshelf_hero_line_editor.lua:81
-#: lib/bookshelf_hero_line_editor.lua:425 lib/bookshelf_settings.lua:472
+#: lib/bookshelf_hero_line_editor.lua:460 lib/bookshelf_settings.lua:472
 #: lib/bookshelf_settings.lua:798 lib/bookshelf_settings.lua:881
 #: lib/bookshelf_settings.lua:937
 msgid "Default"
@@ -363,52 +363,60 @@ msgstr "(Predeterminada)"
 msgid "Pick font"
 msgstr "Elegir fuente"
 
-#: lib/bookshelf_hero_line_editor.lua:278
+#: lib/bookshelf_hero_line_editor.lua:295
 msgid "Bold"
 msgstr "Negrita"
 
-#: lib/bookshelf_hero_line_editor.lua:287
+#: lib/bookshelf_hero_line_editor.lua:304
 msgid "Size"
 msgstr "Tamaño"
 
-#: lib/bookshelf_hero_line_editor.lua:298
+#: lib/bookshelf_hero_line_editor.lua:315
 msgid "Font ✓"
 msgstr "Fuente ✓"
 
-#: lib/bookshelf_hero_line_editor.lua:298
+#: lib/bookshelf_hero_line_editor.lua:315
 msgid "Font…"
 msgstr "Fuente…"
 
-#: lib/bookshelf_hero_line_editor.lua:345
+#: lib/bookshelf_hero_line_editor.lua:364
 msgid "Bar style"
 msgstr "Estilo de barra"
 
-#: lib/bookshelf_hero_line_editor.lua:346
+#: lib/bookshelf_hero_line_editor.lua:365
 msgid "Bar: "
 msgstr "Barra: "
 
-#: lib/bookshelf_hero_line_editor.lua:359
+#: lib/bookshelf_hero_line_editor.lua:378
 msgid "- Bar"
 msgstr "- Barra"
 
-#: lib/bookshelf_hero_line_editor.lua:359
+#: lib/bookshelf_hero_line_editor.lua:378
 msgid "+ Bar"
 msgstr "+ Barra"
 
-#: lib/bookshelf_hero_line_editor.lua:369
-#: lib/bookshelf_hero_line_editor.lua:384
+#: lib/bookshelf_hero_line_editor.lua:388
+#: lib/bookshelf_hero_line_editor.lua:403
 msgid "Bar height"
 msgstr "Altura de barra"
 
-#: lib/bookshelf_hero_line_editor.lua:370
+#: lib/bookshelf_hero_line_editor.lua:389
 msgid "Height: "
 msgstr "Altura: "
 
-#: lib/bookshelf_hero_line_editor.lua:406
+#: lib/bookshelf_hero_line_editor.lua:413
+msgid "- Spacer"
+msgstr ""
+
+#: lib/bookshelf_hero_line_editor.lua:413
+msgid "+ Spacer"
+msgstr ""
+
+#: lib/bookshelf_hero_line_editor.lua:441
 msgid "Tokens…"
 msgstr "Tokens…"
 
-#: lib/bookshelf_hero_line_editor.lua:417
+#: lib/bookshelf_hero_line_editor.lua:452
 msgid "Icons…"
 msgstr "Iconos…"
 
