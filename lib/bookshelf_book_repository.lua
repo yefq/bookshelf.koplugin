@@ -2937,7 +2937,18 @@ function Repo.getBySource(source, filter, sort_priority, offset, limit)
                         b._progress_fetched   = true
                         s = status
                     end
-                    if s and filter.statuses[s] then kept[#kept + 1] = b end
+                    -- Normalise to bookshelf vocabulary (matches the chip
+                    -- editor's status IDs: unread / reading / on_hold /
+                    -- finished). KOReader writes a different set into
+                    -- DocSettings ("complete" / "abandoned"; nil/"new" for
+                    -- unopened books) so we must map across before the
+                    -- filter lookup, or unread / Finished / On-hold books
+                    -- get silently dropped. (Issue #41.)
+                    if     s == nil or s == "new" then s = "unread"
+                    elseif s == "complete"        then s = "finished"
+                    elseif s == "abandoned"       then s = "on_hold"
+                    end
+                    if filter.statuses[s] then kept[#kept + 1] = b end
                 end
                 candidates = kept
             end

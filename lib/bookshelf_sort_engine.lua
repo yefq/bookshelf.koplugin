@@ -17,8 +17,26 @@ local SortEngine = {}
 --   _ACTIVE:   what-am-I-reading-now first; unread next; finished last.
 -- on_hold sits third in both -- shelved books are below active reading but
 -- above already-read.
-local STATUS_RANK_PROGRESS = { unread = 1, reading = 2, on_hold = 3, finished = 4, complete = 4 }
-local STATUS_RANK_ACTIVE   = { reading = 1, unread = 2, on_hold = 3, finished = 4, complete = 4 }
+--
+-- Both vocabularies are present: bookshelf's normalised names (unread,
+-- on_hold, finished) AND KOReader's raw values that may leak through from
+-- DocSettings without normalisation ("new", "abandoned", "complete"), so a
+-- comparator called against either shape resolves to the right rank.
+-- Issue #41: with only the bookshelf names, raw "complete"/"abandoned"
+-- values mapped to nil and dropped to the catch-all 99 ("no metadata"),
+-- placing finished/on-hold books at the END of the read_status sort.
+local STATUS_RANK_PROGRESS = {
+    unread = 1, ["new"] = 1,
+    reading = 2,
+    on_hold = 3, abandoned = 3,
+    finished = 4, complete = 4,
+}
+local STATUS_RANK_ACTIVE   = {
+    reading = 1,
+    unread = 2, ["new"] = 2,
+    on_hold = 3, abandoned = 3,
+    finished = 4, complete = 4,
+}
 
 -- nil-safe comparator helper. Returns -1, 0, +1 so it composes cleanly.
 -- nil always sorts to the end (higher sort order).
@@ -47,9 +65,15 @@ end
 -- effective_percent(book): treat "finished" as 1.0 regardless of stored value.
 -- Fixes the issue where books marked finished but at 99% still show as < 100%.
 -- Also handles lfs-entry shape: _pct / _status instead of percent_finished / read_status.
+--
+-- Unread books (no sidecar -> nil status, nil pct OR "new" status) get 0.0
+-- explicitly. Without this they returned nil and the chained cmp's
+-- SORT_TO_END sentinel pushed them to the end regardless of direction,
+-- so the "Unread first" sort put them last. (Issue #41.)
 local function effective_percent(b)
     local status = b.read_status or b._status
     if status == "finished" or status == "complete" then return 1.0 end
+    if status == nil or status == "new" or status == "unread" then return 0 end
     return b.percent_finished or b._pct
 end
 
@@ -143,14 +167,18 @@ SortEngine.KEYS = {
     read_status         = { label = tr("Unread/Reading/Finished"),
                             short = tr("Unread 1st"),
                             comparator = function(a, b)
-                                return cmp(STATUS_RANK_PROGRESS[a.read_status or a._status] or 99,
-                                           STATUS_RANK_PROGRESS[b.read_status or b._status] or 99)
+                                -- nil status == unread (no sidecar); look up
+                                -- "unread" rather than falling through to 99
+                                -- so unread books sort first as the label
+                                -- promises. (Issue #41.)
+                                return cmp(STATUS_RANK_PROGRESS[a.read_status or a._status or "unread"] or 99,
+                                           STATUS_RANK_PROGRESS[b.read_status or b._status or "unread"] or 99)
                             end },
     read_status_active  = { label = tr("Reading/Unread/Finished"),
                             short = tr("Reading 1st"),
                             comparator = function(a, b)
-                                return cmp(STATUS_RANK_ACTIVE[a.read_status or a._status] or 99,
-                                           STATUS_RANK_ACTIVE[b.read_status or b._status] or 99)
+                                return cmp(STATUS_RANK_ACTIVE[a.read_status or a._status or "unread"] or 99,
+                                           STATUS_RANK_ACTIVE[b.read_status or b._status or "unread"] or 99)
                             end },
     -- Book record: a.date_added
     -- lfs entry:   a.attr.modification
