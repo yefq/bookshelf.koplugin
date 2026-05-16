@@ -111,6 +111,7 @@ Open **menu -> Edit hero card** to toggle regions on/off (tap a row) or open the
 | **L / C / R** | Alignment cycle (left / centre / right) |
 | **Bar style** | Cycle through 7 bar styles (Progress region only, requires Bookends) |
 | **+ Bar / - Bar** | Insert or remove the `%bar` token in the Progress template |
+| **+ Spacer / - Spacer** | Insert or remove the `%spacer` elastic-gap token in any region (other than Description) |
 | **Bar height** | +/- 1 / +/- 5 nudge for the inline bar's pixel height |
 | **Tokens...** | Pick from a categorised token catalogue with live preview |
 | **Icons...** | Insert icon glyphs (requires Bookends) |
@@ -175,6 +176,7 @@ Tokens are placeholders prefixed with `%`. Conditional logic uses `[if:cond]...[
 | `%pages_left` | *176* |
 | `%book_pct` / `%book_pct_left` | *19%* / *81%* |
 | `%bar` | Inline progress-bar widget (Progress region only) |
+| `%spacer` | Elastic gap that pushes content left/right (any region). `Reading%spacer47%` renders "Reading" on the left and "47%" on the right. |
 
 #### Statistics (requires the `statistics` plugin)
 
@@ -273,7 +275,7 @@ Selected keys:
 <details>
 <summary><strong>Known limitations</strong> -- rough edges and why they're there</summary>
 
-- **`%bar` outside the Progress region** renders as literal text. The inline-bar split only runs in the progress block of the renderer.
+- **`%bar` styling controls live in the Progress region.** Inserting `%bar` in another region renders the widget but uses the bordered default style and 100% bar height since the Bar style / Bar height controls only appear in the Progress region's editor.
 - **Italic** is reachable only via the font picker (selecting an italic family). The line editor has no italic toggle because `TextBoxWidget` doesn't synthesise italic from upright fonts.
 - **Inline format tags** `[b]`, `[i]`, `[u]` in templates are stripped before display. Per-region bold is via the Bold button.
 - **Page count for EPUBs** requires opening the book at least once. The count comes from KOReader's pagemap or stats, both of which are populated only after the first paginate.

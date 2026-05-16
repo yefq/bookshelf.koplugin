@@ -69,7 +69,19 @@ local function fontFace(face_name, base)
     return Font:getFace("infofont", size)
 end
 
-local BAR_TOKEN_PATTERN = "%%bar"
+-- Elastic tokens: tokens that, when present in a region's expanded text,
+-- trigger horizontal-layout rendering ([before-text, elastic-widget, after-
+-- text]) where the elastic widget fills the remaining width. The order
+-- here matters only as documentation; the renderer detects whichever
+-- elastic token appears first in the template.
+--   %bar    -> progress-bar widget (HeroBar). Has a small visual gap on
+--              either side so the bar doesn't weld onto adjacent glyphs.
+--   %spacer -> HorizontalSpan. Pure whitespace; no boundary gap (the span
+--              pixels ARE the gap). Lets users right-align some tokens
+--              against left-aligned ones in any region, e.g.
+--              "Reading%spacer47%" -> "Reading" left, "47%" right.
+local BAR_TOKEN_PATTERN    = "%%bar"
+local SPACER_TOKEN_PATTERN = "%%spacer"
 
 function HeroCard:init()
     self.cover_h = self.cover_h or self.height
@@ -129,6 +141,12 @@ local function buildText(text, region, width)
     }
 end
 
+-- Forward declaration so HeroCard.buildStatusRow below can reference
+-- buildLine before the function body is parsed. Lua free-variable
+-- resolution captures by lexical position, so without this the call
+-- inside buildStatusRow would resolve to a missing global.
+local buildLine
+
 -- buildStatusRow(book, state, width) — module-level helper that produces the
 -- exact status block (status TextBoxWidget + hairline + small gap) rendered
 -- inside _buildRightColumn. Exposed so BookshelfWidget can drop the same
@@ -148,7 +166,7 @@ function HeroCard.buildStatusRow(book, state, width, with_hairline)
     status_text = status_text:gsub("%[/?[biu]%]", "")
     if Tokens.isEmpty(status_text) then return nil end
     local vg = VerticalGroup:new{ align = "left" }
-    vg[#vg + 1] = buildText(status_text, regions.status, width)
+    vg[#vg + 1] = buildLine(status_text, regions.status, width, book)
     if with_hairline then
         vg[#vg + 1] = LineWidget:new{
             dimen      = Geom:new{ w = width, h = Size.line.medium },
@@ -159,26 +177,43 @@ function HeroCard.buildStatusRow(book, state, width, with_hairline)
     return vg
 end
 
--- Build a HorizontalGroup of [text-before, BarWidget, text-after] when the
--- progress template contains %bar. If no %bar, returns a plain TextBoxWidget.
-local function buildProgressLine(expanded, region, width, book)
-    local has_bar = expanded:find(BAR_TOKEN_PATTERN) ~= nil
-    if not has_bar then
+-- buildLine: if `expanded` contains an elastic token (%bar or %spacer),
+-- returns a HorizontalGroup of [text-before, elastic-widget, text-after]
+-- where the elastic widget fills the remaining width. Without an elastic
+-- token, returns a plain TextBoxWidget via buildText. The first elastic
+-- token wins; any further occurrences of either elastic pattern in the
+-- trailing segment are stripped so they don't render as literal text.
+-- Assigned (not `local function`) so the forward declaration above
+-- resolves; HeroCard.buildStatusRow references this by name.
+buildLine = function(expanded, region, width, book)
+    -- Locate the first elastic token (%bar or %spacer), whichever appears
+    -- earliest. Same one-shot semantics either way.
+    local bar_pos    = expanded:find(BAR_TOKEN_PATTERN)
+    local spacer_pos = expanded:find(SPACER_TOKEN_PATTERN)
+    local first_pos, first_pattern, kind
+    if bar_pos and (not spacer_pos or bar_pos <= spacer_pos) then
+        first_pos, first_pattern, kind = bar_pos, BAR_TOKEN_PATTERN, "bar"
+    elseif spacer_pos then
+        first_pos, first_pattern, kind = spacer_pos, SPACER_TOKEN_PATTERN, "spacer"
+    end
+    if not first_pattern then
         return buildText(expanded, region, width)
     end
-    -- Split on the FIRST %bar; defensively strip any further %bar tokens
-    -- from the trailing segment so a hand-edited template containing two
-    -- doesn't render the second as literal text.
-    local before, after = expanded:match("^(.-)%%bar(.*)$")
+
+    -- Split on the FIRST occurrence of the winning token. Defensively
+    -- strip any further occurrences of either elastic pattern from the
+    -- trailing segment so a hand-edited template containing more than one
+    -- doesn't render extras as literal text.
+    local before, after = expanded:match("^(.-)" .. first_pattern .. "(.*)$")
     before = before or expanded
-    after  = (after or ""):gsub("%%bar", "")
-    -- Trim LINE-EDGE whitespace only — leading of `before` and trailing
-    -- of `after`. Preserve whatever the user typed at the BAR BOUNDARY
+    after  = (after or ""):gsub(BAR_TOKEN_PATTERN, ""):gsub(SPACER_TOKEN_PATTERN, "")
+    -- Trim LINE-EDGE whitespace only -- leading of `before` and trailing
+    -- of `after`. Preserve whatever the user typed at the TOKEN BOUNDARY
     -- (trailing of before, leading of after) so a template like
     -- "%book_pct  %bar  %book_time_left" honours the double space as
     -- visual breathing room. TextWidget renders the spaces as part of
     -- its text, so their pixels contribute to the widget's width and
-    -- naturally form the gap to the bar.
+    -- naturally form the gap to the elastic widget.
     before = before:gsub("^%s+", "")
     after  = after:gsub("%s+$", "")
 
@@ -198,40 +233,48 @@ local function buildProgressLine(expanded, region, width, book)
         used_w = used_w + a_widget:getSize().w
     end
 
-    -- Bar height: percentage of the face's nominal point size. The earlier
-    -- probe-via-getSize().h approach measured the FULL line height (height
-    -- + leading + descender), so 100% rendered ~2x taller than the visible
-    -- glyphs — user reported 50% looked right, which is roughly the cap
-    -- height. Using face.size directly gives the cap-height-ish baseline
-    -- the user expects, matching how bookends sizes its own bars. region.
-    -- bar_height (default 100 = match text) scales from there.
-    local face_size = face.size or region.font_size or 14
-    local bar_pct   = region.bar_height or 100
-    local bar_h     = math.max(2, math.floor(face_size * bar_pct / 100 + 0.5))
-    -- Boundary gap: padding.small only kicks in when the user has NOT
-    -- typed any whitespace at that boundary. With a typed space (or
-    -- two), the rendered TextWidget already contains those pixels and
-    -- adding more would compound the gap. Without one,
-    -- padding.small keeps "%book_pct%bar" from looking welded.
-    local before_gap = (b_widget and not before:match("%s$")) and Size.padding.small or 0
-    local after_gap  = (a_widget and not after:match("^%s"))  and Size.padding.small or 0
-    local bar_w = math.max(0, width - used_w - before_gap - after_gap)
+    -- Boundary gap: padding.small only kicks in for %bar (the bar has a
+    -- visible body that benefits from breathing room from adjacent text)
+    -- and only when the user has NOT typed any whitespace at that
+    -- boundary. With a typed space, the rendered TextWidget already
+    -- contains those pixels and adding more would compound the gap. For
+    -- %spacer the elastic widget IS the gap -- adding padding around it
+    -- would just shift the right text inward by a few pixels.
+    local apply_gap  = (kind == "bar")
+    local before_gap = (apply_gap and b_widget and not before:match("%s$")) and Size.padding.small or 0
+    local after_gap  = (apply_gap and a_widget and not after:match("^%s"))  and Size.padding.small or 0
+    local elastic_w  = math.max(0, width - used_w - before_gap - after_gap)
 
-    local pct = book and book.book_pct or 0
-
-    if bar_w < 1 then
-        -- No room for bar. Render text only, joined.
+    if elastic_w < 1 then
+        -- No room for the elastic widget. Render text only, joined.
         local joined = before
         if after ~= "" then joined = joined ~= "" and (joined .. " " .. after) or after end
         return buildText(joined ~= "" and joined or "", region, width)
     end
 
-    local bar = HeroBar:new{
-        width      = bar_w,
-        height     = bar_h,
-        percentage = pct,
-        style      = region.bar_style or "bordered",
-    }
+    local elastic_widget
+    if kind == "bar" then
+        -- Bar height: percentage of the face's nominal point size. The
+        -- earlier probe-via-getSize().h approach measured the FULL line
+        -- height (height + leading + descender), so 100% rendered ~2x
+        -- taller than the visible glyphs -- user reported 50% looked
+        -- right, which is roughly the cap height. Using face.size
+        -- directly gives the cap-height-ish baseline the user expects,
+        -- matching how bookends sizes its own bars. region.bar_height
+        -- (default 100 = match text) scales from there.
+        local face_size = face.size or region.font_size or 14
+        local bar_pct   = region.bar_height or 100
+        local bar_h     = math.max(2, math.floor(face_size * bar_pct / 100 + 0.5))
+        local pct       = book and book.book_pct or 0
+        elastic_widget = HeroBar:new{
+            width      = elastic_w,
+            height     = bar_h,
+            percentage = pct,
+            style      = region.bar_style or "bordered",
+        }
+    else  -- "spacer"
+        elastic_widget = HorizontalSpan:new{ width = elastic_w }
+    end
 
     local hg = HorizontalGroup:new{ align = "center" }
     if b_widget then
@@ -240,7 +283,7 @@ local function buildProgressLine(expanded, region, width, book)
             hg[#hg + 1] = HorizontalSpan:new{ width = before_gap }
         end
     end
-    hg[#hg + 1] = bar
+    hg[#hg + 1] = elastic_widget
     if a_widget then
         if after_gap > 0 then
             hg[#hg + 1] = HorizontalSpan:new{ width = after_gap }
@@ -270,7 +313,7 @@ function HeroCard:_buildRightColumn(book, regions, state, dimen)
         local status_text = Tokens.expand(regions.status.template, book, state)
         status_text = status_text:gsub("%[/?[biu]%]", "")
         if not Tokens.isEmpty(status_text) then
-            local status_widget = buildText(status_text, regions.status, right_w)
+            local status_widget = buildLine(status_text, regions.status, right_w, book)
             local hairline_widget = LineWidget:new{
                 dimen      = Geom:new{ w = right_w, h = Size.line.medium },
                 background = Blitbuffer.gray(0.4),
@@ -350,7 +393,7 @@ function HeroCard:_buildRightColumn(book, regions, state, dimen)
         local title_text = Tokens.expand(regions.title.template, book, state)
         title_text = title_text:gsub("%[/?[biu]%]", "")
         if not Tokens.isEmpty(title_text) then
-            right_top[#right_top + 1] = buildText(title_text, regions.title, right_w)
+            right_top[#right_top + 1] = buildLine(title_text, regions.title, right_w, book)
         end
     end
 
@@ -359,7 +402,7 @@ function HeroCard:_buildRightColumn(book, regions, state, dimen)
         local author_text = Tokens.expand(regions.author.template, book, state)
         author_text = author_text:gsub("%[/?[biu]%]", "")
         if not Tokens.isEmpty(author_text) then
-            right_top[#right_top + 1] = buildText(author_text, regions.author, right_w)
+            right_top[#right_top + 1] = buildLine(author_text, regions.author, right_w, book)
         end
     end
 
@@ -371,7 +414,7 @@ function HeroCard:_buildRightColumn(book, regions, state, dimen)
         local metadata_text = Tokens.expand(regions.metadata.template, book, state)
         metadata_text = metadata_text:gsub("%[/?[biu]%]", "")
         if not Tokens.isEmpty(metadata_text) then
-            right_top[#right_top + 1] = buildText(metadata_text, regions.metadata, right_w)
+            right_top[#right_top + 1] = buildLine(metadata_text, regions.metadata, right_w, book)
         end
     end
 
@@ -390,7 +433,7 @@ function HeroCard:_buildRightColumn(book, regions, state, dimen)
             progress_text = progress_text:gsub("%%bar", "")
         end
         if not Tokens.isEmpty(progress_text) then
-            right_bottom[#right_bottom + 1] = buildProgressLine(progress_text, regions.progress, right_w, book)
+            right_bottom[#right_bottom + 1] = buildLine(progress_text, regions.progress, right_w, book)
         end
     end
 

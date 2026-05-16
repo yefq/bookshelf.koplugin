@@ -166,23 +166,40 @@ local function hasBarToken(dialog)
     return t:find("%%bar") ~= nil
 end
 
--- Insert / remove %bar from the dialog text. Collapses surrounding
--- whitespace so toggling on and off doesn't accumulate spaces.
-local function toggleBarToken(dialog, draft, applyLivePreview)
+-- Returns true iff the current dialog text contains the %spacer token.
+local function hasSpacerToken(dialog)
+    if not dialog then return false end
+    local t = dialog:getInputText() or ""
+    return t:find("%%spacer") ~= nil
+end
+
+-- Insert / remove an elastic token (%bar or %spacer) from the dialog
+-- text. Collapses surrounding whitespace so toggling on and off doesn't
+-- accumulate spaces. Shared between the bar and spacer toggles because
+-- the textual manipulation is identical.
+local function toggleElasticToken(dialog, draft, applyLivePreview, token, pattern)
     if not dialog then return end
     local text = dialog:getInputText() or ""
-    if text:find("%%bar") then
-        text = text:gsub("%s*%%bar%s*", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if text:find(pattern) then
+        text = text:gsub("%s*" .. pattern .. "%s*", " "):gsub("^%s+", ""):gsub("%s+$", "")
     else
         if text == "" then
-            text = "%bar"
+            text = token
         else
-            text = text .. " %bar"
+            text = text .. " " .. token
         end
     end
     if dialog.setInputText then dialog:setInputText(text) end
     draft.template = text
     applyLivePreview()
+end
+
+local function toggleBarToken(dialog, draft, applyLivePreview)
+    toggleElasticToken(dialog, draft, applyLivePreview, "%bar", "%%bar")
+end
+
+local function toggleSpacerToken(dialog, draft, applyLivePreview)
+    toggleElasticToken(dialog, draft, applyLivePreview, "%spacer", "%%spacer")
 end
 
 -- Soft-imports bookends's icon library and shows the picker. Returns
@@ -337,55 +354,73 @@ function LineEditor.show(region_key, bw, settings_module, touchmenu_instance)
 
         rows[#rows + 1] = style_row
 
-        -- Row 2: progress-region-only bar controls.
+        -- Spacer toggle is universal: any region can use %spacer to push
+        -- content left/right. Bar controls are progress-region-only because
+        -- HeroBar renders a progress glyph driven by book.book_pct.
+        local elastic_row = {}
         if region_key == "progress" then
-            local bar_row = {
-                {
-                    text_func = function()
-                        if not hasBarToken(dialog) then return _("Bar style") end
-                        return _("Bar: ") .. (draft.bar_style or "bordered")
-                    end,
-                    enabled_func = function() return hasBarToken(dialog) end,
-                    callback = function()
-                        if dialog then dialog:onCloseKeyboard() end
-                        local styles = HeroBar.availableStyles()
-                        draft.bar_style = cycleNext(styles, draft.bar_style or "bordered")
-                        applyLivePreview()
-                        if dialog then dialog:reinit() end
-                    end,
-                },
-                {
-                    text_func = function()
-                        return hasBarToken(dialog) and _("- Bar") or _("+ Bar")
-                    end,
-                    callback = function()
-                        if dialog then dialog:onCloseKeyboard() end
-                        toggleBarToken(dialog, draft, applyLivePreview)
-                        if dialog then dialog:reinit() end
-                    end,
-                },
-                {
-                    text_func = function()
-                        if not hasBarToken(dialog) then return _("Bar height") end
-                        return _("Height: ") .. tostring(draft.bar_height or 100) .. "%"
-                    end,
-                    enabled_func = function() return hasBarToken(dialog) end,
-                    callback = function()
-                        if dialog then dialog:onCloseKeyboard() end
-                        -- Percentage of the rendered text height. 100% = bar
-                        -- matches the text exactly. Range 30-200% covers
-                        -- "thin underline" through "double-height block".
-                        showSizeNudge(
-                            draft.bar_height or 100,
-                            100,
-                            function(val) draft.bar_height = val; applyLivePreview() end,
-                            function() if dialog then dialog:reinit() end end,
-                            { min = 30, max = 200, step_small = 5, step_big = 20,
-                              unit = "%", title = _("Bar height") })
-                    end,
-                },
+            elastic_row[#elastic_row + 1] = {
+                text_func = function()
+                    if not hasBarToken(dialog) then return _("Bar style") end
+                    return _("Bar: ") .. (draft.bar_style or "bordered")
+                end,
+                enabled_func = function() return hasBarToken(dialog) end,
+                callback = function()
+                    if dialog then dialog:onCloseKeyboard() end
+                    local styles = HeroBar.availableStyles()
+                    draft.bar_style = cycleNext(styles, draft.bar_style or "bordered")
+                    applyLivePreview()
+                    if dialog then dialog:reinit() end
+                end,
             }
-            rows[#rows + 1] = bar_row
+            elastic_row[#elastic_row + 1] = {
+                text_func = function()
+                    return hasBarToken(dialog) and _("- Bar") or _("+ Bar")
+                end,
+                callback = function()
+                    if dialog then dialog:onCloseKeyboard() end
+                    toggleBarToken(dialog, draft, applyLivePreview)
+                    if dialog then dialog:reinit() end
+                end,
+            }
+            elastic_row[#elastic_row + 1] = {
+                text_func = function()
+                    if not hasBarToken(dialog) then return _("Bar height") end
+                    return _("Height: ") .. tostring(draft.bar_height or 100) .. "%"
+                end,
+                enabled_func = function() return hasBarToken(dialog) end,
+                callback = function()
+                    if dialog then dialog:onCloseKeyboard() end
+                    -- Percentage of the rendered text height. 100% = bar
+                    -- matches the text exactly. Range 30-200% covers
+                    -- "thin underline" through "double-height block".
+                    showSizeNudge(
+                        draft.bar_height or 100,
+                        100,
+                        function(val) draft.bar_height = val; applyLivePreview() end,
+                        function() if dialog then dialog:reinit() end end,
+                        { min = 30, max = 200, step_small = 5, step_big = 20,
+                          unit = "%", title = _("Bar height") })
+                end,
+            }
+        end
+        -- Description is paragraph-flow, not a single-line layout; %spacer
+        -- would only act on the first paragraph anyway and would surprise
+        -- users typing a blurb. Hide the toggle there.
+        if region_key ~= "description" then
+            elastic_row[#elastic_row + 1] = {
+                text_func = function()
+                    return hasSpacerToken(dialog) and _("- Spacer") or _("+ Spacer")
+                end,
+                callback = function()
+                    if dialog then dialog:onCloseKeyboard() end
+                    toggleSpacerToken(dialog, draft, applyLivePreview)
+                    if dialog then dialog:reinit() end
+                end,
+            }
+        end
+        if #elastic_row > 0 then
+            rows[#rows + 1] = elastic_row
         end
 
         -- Row 3: action row.
