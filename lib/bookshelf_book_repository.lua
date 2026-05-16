@@ -1585,12 +1585,20 @@ function Repo.getFavorites(limit, offset)
     if key == "title" then
         -- Title-sort prefetch: get_cover=false skips the zstd decompression +
         -- BlitBuffer allocation per favourite. The loop reads only info.title.
+        -- bim is nil when CoverBrowser is disabled (issue #49); fall back to
+        -- the filename basename for every favourite in that case so the
+        -- sort still runs deterministically rather than nil-derefing on
+        -- the very first iteration.
         local bim = getBookInfoMgr()
         local titles = {}
-        for _, item in ipairs(items) do
+        for _i, item in ipairs(items) do
             local fp = item.file
-            local info = bim:getBookInfo(fp, false) or {}
-            titles[fp] = (info.title or (fp and fp:match("([^/]+)$")) or ""):lower()
+            local title
+            if bim then
+                local info = bim:getBookInfo(fp, false) or {}
+                title = info.title
+            end
+            titles[fp] = (title or (fp and fp:match("([^/]+)$")) or ""):lower()
         end
         table.sort(items, function(a, b) return titles[a.file] < titles[b.file] end)
     elseif key == "recently_read" then
