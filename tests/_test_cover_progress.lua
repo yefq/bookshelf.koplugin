@@ -74,7 +74,7 @@ local function setAll(v)
     _settings.bookshelf_progress_badge_enabled    = v
 end
 
-local CP = require("bookshelf_cover_progress")
+local CP = require("lib/bookshelf_cover_progress")
 
 local pass, fail = 0, 0
 local function test(name, fn)

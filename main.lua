@@ -29,9 +29,10 @@
 --     which is required so the close-document hook fires inside the Reader.
 
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local BookshelfSettings = require("lib/bookshelf_settings_store")
 local UIManager       = require("ui/uimanager")
 local logger          = require("logger")
-local _               = require("bookshelf_i18n").gettext
+local _               = require("lib/bookshelf_i18n").gettext
 local T               = require("ffi/util").template
 
 local Bookshelf = WidgetContainer:extend{
@@ -39,7 +40,7 @@ local Bookshelf = WidgetContainer:extend{
     is_doc_only = false, -- must be false: hook fires in Reader context
 }
 
-require("bookshelf_colour_palette").attach(Bookshelf)
+require("lib/bookshelf_colour_palette").attach(Bookshelf)
 
 -- Tracks the live BookshelfWidget singleton across plugin instances. Two
 -- Bookshelf instances exist — one attached to FM, one to Reader — but the
@@ -85,19 +86,65 @@ local function _installBroadcastTag()
     UIManager._bookshelf_broadcast_wrapped = true
     local orig = UIManager.broadcastEvent
     UIManager.broadcastEvent = function(self_um, event, ...)
-        if event then event._bookshelf_from_broadcast = true end
+        -- type-guard: some upstream plugins (autodim's ramp_task etc.)
+        -- call broadcastEvent with a bare string as the event name.
+        -- Reading fields from a string returns nil (Lua string metatable),
+        -- so the rest of the broadcast pipeline tolerates it -- but
+        -- WRITING a field to a string crashes the VM. Issue #39: the
+        -- autodim dimmer fired every 3 minutes and tore down KOReader
+        -- with "attempt to index local 'event' (a string value)".
+        if type(event) == "table" then
+            event._bookshelf_from_broadcast = true
+        end
         return orig(self_um, event, ...)
+    end
+end
+
+-- Remove leftover v1.1.x bookshelf_*.lua files from the plugin root that
+-- KOReader's archive extractor (Device:unpackArchive) leaves behind when a
+-- user upgrades over the top of an older install. Every helper now lives
+-- in lib/, so any bookshelf_*.lua sitting at the root after a v1.2 upgrade
+-- is dead code. Idempotent: a fresh v1.2 install has nothing matching, so
+-- this is a no-op on clean installs. Safe: only removes files matching
+-- "bookshelf_*.lua" at the koplugin root -- main.lua / _meta.lua / lib/
+-- contents / README / LICENSE are untouched.
+local function _cleanLegacyLayout()
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    if not ok_lfs or not lfs or not lfs.dir then return end
+    local DataStorage = require("datastorage")
+    local plugin_dir = DataStorage:getDataDir() .. "/plugins/bookshelf.koplugin"
+    local ok, iter, dir_obj = pcall(lfs.dir, plugin_dir)
+    if not ok or type(iter) ~= "function" then return end
+    local removed = 0
+    for entry in iter, dir_obj do
+        if entry:match("^bookshelf_.+%.lua$") then
+            -- These are leftovers from the v1.1.x flat layout. The new
+            -- helpers all live in lib/. Removing the root copy prevents
+            -- accidental shadowing if any old code still did
+            -- require("bookshelf_X") without the lib/ prefix.
+            if os.remove(plugin_dir .. "/" .. entry) then
+                removed = removed + 1
+            end
+        end
+    end
+    if removed > 0 then
+        logger.info(string.format(
+            "[bookshelf] cleaned %d legacy v1.1 files from %s",
+            removed, plugin_dir))
     end
 end
 
 function Bookshelf:init()
     _installBroadcastTag()
+    -- Run once per init -- no settings flag needed because the clean is
+    -- idempotent and cheap (one lfs.dir scan over the plugin root).
+    _cleanLegacyLayout()
     -- Cache update-related settings on the instance for the menu's text_func
     -- closures. Defaults match bookends: branch empty, source = "release",
     -- background check OFF (opt-in via the menu toggle).
-    self.dev_branch          = G_reader_settings:readSetting("bookshelf_dev_branch") or ""
-    self.last_install_source = G_reader_settings:readSetting("bookshelf_last_install_source") or "release"
-    self.check_updates       = G_reader_settings:isTrue("bookshelf_check_updates")
+    self.dev_branch          = BookshelfSettings.read("dev_branch") or ""
+    self.last_install_source = BookshelfSettings.read("last_install_source") or "release"
+    self.check_updates       = BookshelfSettings.isTrue("check_updates")
 
     -- Patch the start_with menu so users can pick Bookshelf as their home.
     self:_registerStartWithMenu()
@@ -339,7 +386,7 @@ function Bookshelf:addToMainMenu(menu_items)
     if self.ui.document then return end
 
     local outer = self
-    local S = require("bookshelf_settings")
+    local S = require("lib/bookshelf_settings")
     -- Stash plugin ref now so _updateSubItems callbacks resolve correctly.
     S._plugin = outer
 
@@ -371,13 +418,14 @@ function Bookshelf:addToMainMenu(menu_items)
     }
 
     menu_items.bookshelf_shelf_tabs = {
-        text                = _("Choose Bookshelf tabs"),
-        enabled_func        = function() return outer:_isShowing() end,
-        separator           = true,
+        text                = _("Bookshelf chips\xE2\x80\xA6"),
         sub_item_table_func = function()
             S._bw = _live_widget
-            return S:_chipsSubItems()
+            return S:_tabsMenuItems()
         end,
+        -- Visually separate the customisation entries above from the
+        -- broader Settings / Updates / About cluster below.
+        separator = true,
     }
 
     menu_items.bookshelf_settings = {
@@ -457,7 +505,7 @@ function Bookshelf:show()
         self._widget:softRefresh()
         return
     end
-    local BookshelfWidget = require("bookshelf_widget")
+    local BookshelfWidget = require("lib/bookshelf_widget")
     self._widget = BookshelfWidget:new{}
     -- Clear our reference if the widget is dismissed for any reason, so a
     -- subsequent show() falls back to the create path.
@@ -528,13 +576,13 @@ function Bookshelf:onDispatcherRegisterActions()
     Dispatcher:registerAction("bookshelf_next_tab", {
         category = "none",
         event    = "BookshelfNextChip",
-        title    = _("Bookshelf: next tab"),
+        title    = _("Bookshelf: next chip"),
         general  = true,
     })
     Dispatcher:registerAction("bookshelf_prev_tab", {
         category = "none",
         event    = "BookshelfPrevChip",
-        title    = _("Bookshelf: previous tab"),
+        title    = _("Bookshelf: previous chip"),
         general  = true,
     })
     Dispatcher:registerAction("bookshelf_toggle_hero", {
@@ -620,7 +668,7 @@ function Bookshelf:_safeShow()
     --      the message itself; the close still happens, just silently).
     local our_close_msg = nil
     local sui_mode = G_reader_settings:readSetting("simpleui_hs_closing_notice_mode")
-    local show_msg = G_reader_settings:nilOrTrue("bookshelf_show_close_msg")
+    local show_msg = BookshelfSettings.nilOrTrue("show_close_msg")
     if show_msg and sui_mode ~= "always" then
         local InfoMessage = require("ui/widget/infomessage")
         our_close_msg = InfoMessage:new{
@@ -829,7 +877,7 @@ function Bookshelf:onCloseDocument()
     -- The just-closed file's stats DID change (new pages read), so its
     -- cached enrichStats fields should be dropped — the hero rebuild that
     -- follows must see the new totals. Targeted to the closed file only.
-    local Repo = require("bookshelf_book_repository")
+    local Repo = require("lib/bookshelf_book_repository")
     if Repo and self.ui and self.ui.document and self.ui.document.file then
         local fp = self.ui.document.file
         if Repo.invalidateStatsCache then Repo.invalidateStatsCache(fp) end
@@ -882,7 +930,7 @@ end
 --   bookshelf_last_install_source — "release" or "branch:<name>"
 --   bookshelf_check_updates       — boolean: silent wake-time check
 
-local Updater = require("bookshelf_updater")
+local Updater = require("lib/bookshelf_updater")
 
 -- Branch-aware update entry: if a dev branch is configured, install that
 -- branch's latest tip (no release needed). Otherwise hit the GitHub
@@ -893,13 +941,13 @@ function Bookshelf:checkForUpdates()
         local branch = self.dev_branch
         Updater.installBranch(branch, function()
             self.last_install_source = "branch:" .. branch
-            G_reader_settings:saveSetting("bookshelf_last_install_source", self.last_install_source)
+            BookshelfSettings.save("last_install_source", self.last_install_source)
             G_reader_settings:flush()
         end)
     else
         Updater.check(function()
             self.last_install_source = "release"
-            G_reader_settings:saveSetting("bookshelf_last_install_source", "release")
+            BookshelfSettings.save("last_install_source", "release")
             G_reader_settings:flush()
         end)
     end
@@ -926,7 +974,7 @@ function Bookshelf:editDevBranch(touchmenu_instance)
                     local raw = dlg:getInputText() or ""
                     local trimmed = raw:gsub("^%s+", ""):gsub("%s+$", "")
                     self.dev_branch = trimmed
-                    G_reader_settings:saveSetting("bookshelf_dev_branch", trimmed)
+                    BookshelfSettings.save("dev_branch", trimmed)
                     G_reader_settings:flush()
                     UIManager:close(dlg)
                     if touchmenu_instance and touchmenu_instance.updateItems then
@@ -994,8 +1042,15 @@ function Bookshelf:scanAllMetadata()
         })
         Trapper.confirm = original_confirm
         if not ok then error(err) end
-        local Repo = require("bookshelf_book_repository")
+        local Repo = require("lib/bookshelf_book_repository")
         Repo.invalidateWalkCache()
+        -- Also drop per-chip book-list caches so the next tab render
+        -- re-reads from the fresh BIM data rather than the pre-scan
+        -- cached order. Without this the user has to switch tabs to
+        -- see the newly-populated authors/series come through.
+        if Repo.invalidateBookCache then
+            Repo.invalidateBookCache("scanAllMetadata")
+        end
     end)
 end
 
@@ -1008,11 +1063,11 @@ function Bookshelf:resetToStableRelease()
         ok_text = _("Reset"),
         ok_callback = function()
             self.dev_branch = ""
-            G_reader_settings:saveSetting("bookshelf_dev_branch", "")
+            BookshelfSettings.save("dev_branch", "")
             G_reader_settings:flush()
             Updater.installLatestStable(function()
                 self.last_install_source = "release"
-                G_reader_settings:saveSetting("bookshelf_last_install_source", "release")
+                BookshelfSettings.save("last_install_source", "release")
                 G_reader_settings:flush()
             end)
         end,
@@ -1063,11 +1118,49 @@ end
 -- hex cache so progress-bar colours pick up the new mode, then rebuild the
 -- live widget if it is currently shown.
 function Bookshelf:onColorRenderingUpdate()
-    local ok, Colour = pcall(require, "bookshelf_colour")
+    local ok, Colour = pcall(require, "lib/bookshelf_colour")
     if ok then Colour.flushCache() end
     if _live_widget and _live_widget._rebuild then
         _live_widget:_rebuild()
         UIManager:setDirty(_live_widget, "ui")
+    end
+end
+
+-- deletePluginSettings(): called by KOReader's plugin manager AFTER the
+-- .koplugin directory has been removed, when the user opted in to "also
+-- delete plugin settings". (Available in KOReader nightly via upstream
+-- PR #15240, expected in the next stable release.) Anything outside the
+-- install directory we need to clean up:
+--   - <settings_dir>/bookshelf.lua (the LuaSettings file the store writes)
+--   - any legacy bookshelf_* keys in G_reader_settings that the migration
+--     never moved (e.g. user deleted the plugin before ever opening it
+--     post-upgrade)
+function Bookshelf:deletePluginSettings()
+    local DataStorage = require("datastorage")
+    local settings_dir = DataStorage:getSettingsDir()
+    os.remove(settings_dir .. "/bookshelf.lua")
+    os.remove(settings_dir .. "/bookshelf.lua.old")
+    -- Clear any legacy global keys that never migrated. The migration
+    -- normally drains them on first plugin init, but a "install plugin,
+    -- never open it, uninstall" sequence would leave them behind.
+    local PREFIX = "bookshelf_"
+    local known = {
+        "active_chip", "active_page", "drill_path", "tabs",
+        "chips_disabled", "font_scale", "chip_font_scale",
+        "chip_flex_widths", "calibre_metadata", "latest_walk_depth",
+        "show_close_msg", "show_series_num",
+        "progress_fill", "progress_track",
+        "progress_badge_enabled", "progress_bar_enabled",
+        "progress_bookmark_enabled", "progress_enabled",
+        "sort_all_mixed", "sort_all_reverse",
+        "check_updates", "dev_branch", "last_install_source",
+    }
+    for _, k in ipairs(known) do
+        G_reader_settings:delSetting(PREFIX .. k)
+    end
+    for _, chip in ipairs({ "all", "recent", "latest", "series", "authors",
+                            "genres", "tags", "favorites" }) do
+        G_reader_settings:delSetting(PREFIX .. "sort_" .. chip)
     end
 end
 

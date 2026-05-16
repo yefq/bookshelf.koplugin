@@ -13,8 +13,8 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local OverlapGroup   = require("ui/widget/overlapgroup")
 local Geom           = require("ui/geometry")
 local GestureRange   = require("ui/gesturerange")
-local SpineWidget    = require("bookshelf_spine_widget")
-local FolderCard     = require("bookshelf_folder_card")
+local SpineWidget    = require("lib/bookshelf_spine_widget")
+local FolderCard     = require("lib/bookshelf_folder_card")
 
 local FolderStack = InputContainer:extend{
     folder      = nil,    -- { path, label, first_book }

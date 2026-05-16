@@ -23,9 +23,9 @@ local Size            = require("ui/size")
 local Font            = require("ui/font")
 local Blitbuffer      = require("ffi/blitbuffer")
 local Screen          = require("device").screen
-local SpineWidget     = require("bookshelf_spine_widget")
-local SeriesStack     = require("bookshelf_series_stack")
-local FolderStack     = require("bookshelf_folder_stack")
+local SpineWidget     = require("lib/bookshelf_spine_widget")
+local SeriesStack     = require("lib/bookshelf_series_stack")
+local FolderStack     = require("lib/bookshelf_folder_stack")
 
 local ShelfRow = {}
 
@@ -211,6 +211,11 @@ function ShelfRow.new(opts)
                 -- bookmark glyph fully inside the cover (avoiding clash
                 -- with the title text below). Regular mode lets it dangle.
                 show_titles   = opts.show_titles,
+                -- Pass through the single-series context so SpineWidget
+                -- can apply the user's "Show series #" preference -- the
+                -- "Within series folder" option only renders the badge
+                -- when in_series is true.
+                in_series     = opts.in_series == true,
             }
             if opts.show_titles then
                 local title_text = item.title or
