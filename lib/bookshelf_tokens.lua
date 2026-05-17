@@ -67,6 +67,7 @@ Tokens.CATALOGUE = {
     { category = "Logic",    token = "[if:not foo]…[/if]",description = "Show … when foo is empty" },
     { category = "Logic",    token = "[if:foo>50]…[/if]", description = "Numeric comparison" },
     { category = "Logic",    token = "[if:foo]…[else]…[/if]", description = "If/else" },
+    { category = "Logic",    token = "%spacer",           description = "Elastic gap: pushes content left/right to the region edges" },
 }
 
 local function metaToken(field)

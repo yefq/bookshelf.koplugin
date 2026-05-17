@@ -111,7 +111,6 @@ Open **menu -> Edit hero card** to toggle regions on/off (tap a row) or open the
 | **L / C / R** | Alignment cycle (left / centre / right) |
 | **Bar style** | Cycle through 7 bar styles (Progress region only, requires Bookends) |
 | **+ Bar / - Bar** | Insert or remove the `%bar` token in the Progress template |
-| **+ Spacer / - Spacer** | Insert or remove the `%spacer` elastic-gap token in any region (other than Description) |
 | **Bar height** | +/- 1 / +/- 5 nudge for the inline bar's pixel height |
 | **Tokens...** | Pick from a categorised token catalogue with live preview |
 | **Icons...** | Insert icon glyphs (requires Bookends) |

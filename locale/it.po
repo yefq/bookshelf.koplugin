@@ -3,7 +3,7 @@
 msgid ""
 msgstr ""
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-17 06:59+0100\n"
+"POT-Creation-Date: 2026-05-17 07:26+0100\n"
 "Language: it\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -109,7 +109,7 @@ msgstr "(nessuno)"
 
 #: lib/bookshelf_chip_editor.lua:368 lib/bookshelf_chip_editor.lua:618
 #: lib/bookshelf_chip_editor.lua:1039 lib/bookshelf_chip_editor.lua:1208
-#: lib/bookshelf_colour_palette.lua:347 lib/bookshelf_hero_line_editor.lua:429
+#: lib/bookshelf_colour_palette.lua:347 lib/bookshelf_hero_line_editor.lua:397
 #: lib/bookshelf_settings.lua:788 lib/bookshelf_settings.lua:880
 #: lib/bookshelf_settings.lua:936 lib/bookshelf_widget.lua:2322
 #: lib/bookshelf_widget.lua:4795 main.lua:996
@@ -181,12 +181,12 @@ msgstr "Eliminare questo chip?? L'operazione non può essere annullata."
 msgid "Delete"
 msgstr "Elimina"
 
-#: lib/bookshelf_chip_editor.lua:643 lib/bookshelf_hero_line_editor.lua:477
+#: lib/bookshelf_chip_editor.lua:643 lib/bookshelf_hero_line_editor.lua:445
 #: main.lua:1001
 msgid "Save"
 msgstr "Salva"
 
-#: lib/bookshelf_chip_editor.lua:730 lib/bookshelf_settings.lua:1333
+#: lib/bookshelf_chip_editor.lua:730 lib/bookshelf_settings.lua:1339
 msgid "New chip"
 msgstr "Nuovo chip"
 
@@ -320,7 +320,7 @@ msgid "Chip icon"
 msgstr "Icona chip"
 
 #: lib/bookshelf_colour_palette.lua:349 lib/bookshelf_hero_line_editor.lua:81
-#: lib/bookshelf_hero_line_editor.lua:460 lib/bookshelf_settings.lua:472
+#: lib/bookshelf_hero_line_editor.lua:428 lib/bookshelf_settings.lua:472
 #: lib/bookshelf_settings.lua:798 lib/bookshelf_settings.lua:881
 #: lib/bookshelf_settings.lua:937
 msgid "Default"
@@ -363,60 +363,52 @@ msgstr "(Predefinito)"
 msgid "Pick font"
 msgstr "Scegli font"
 
-#: lib/bookshelf_hero_line_editor.lua:295
+#: lib/bookshelf_hero_line_editor.lua:278
 msgid "Bold"
 msgstr "Grassetto"
 
-#: lib/bookshelf_hero_line_editor.lua:304
+#: lib/bookshelf_hero_line_editor.lua:287
 msgid "Size"
 msgstr "Dimensione"
 
-#: lib/bookshelf_hero_line_editor.lua:315
+#: lib/bookshelf_hero_line_editor.lua:298
 msgid "Font ✓"
 msgstr "Font ✓"
 
-#: lib/bookshelf_hero_line_editor.lua:315
+#: lib/bookshelf_hero_line_editor.lua:298
 msgid "Font…"
 msgstr "Font…"
 
-#: lib/bookshelf_hero_line_editor.lua:364
+#: lib/bookshelf_hero_line_editor.lua:348
 msgid "Bar style"
 msgstr "Stile barra"
 
-#: lib/bookshelf_hero_line_editor.lua:365
+#: lib/bookshelf_hero_line_editor.lua:349
 msgid "Bar: "
 msgstr "Barra: "
 
-#: lib/bookshelf_hero_line_editor.lua:378
+#: lib/bookshelf_hero_line_editor.lua:362
 msgid "- Bar"
 msgstr "- Barra"
 
-#: lib/bookshelf_hero_line_editor.lua:378
+#: lib/bookshelf_hero_line_editor.lua:362
 msgid "+ Bar"
 msgstr "+ Barra"
 
-#: lib/bookshelf_hero_line_editor.lua:388
-#: lib/bookshelf_hero_line_editor.lua:403
+#: lib/bookshelf_hero_line_editor.lua:372
+#: lib/bookshelf_hero_line_editor.lua:387
 msgid "Bar height"
 msgstr "Altezza barra"
 
-#: lib/bookshelf_hero_line_editor.lua:389
+#: lib/bookshelf_hero_line_editor.lua:373
 msgid "Height: "
 msgstr "Altezza: "
 
-#: lib/bookshelf_hero_line_editor.lua:413
-msgid "- Spacer"
-msgstr ""
-
-#: lib/bookshelf_hero_line_editor.lua:413
-msgid "+ Spacer"
-msgstr ""
-
-#: lib/bookshelf_hero_line_editor.lua:441
+#: lib/bookshelf_hero_line_editor.lua:409
 msgid "Tokens…"
 msgstr "Token…"
 
-#: lib/bookshelf_hero_line_editor.lua:452
+#: lib/bookshelf_hero_line_editor.lua:420
 msgid "Icons…"
 msgstr "Icone…"
 
@@ -608,7 +600,7 @@ msgstr ""
 msgid "Book detail font scale"
 msgstr "Scala font dettagli libro"
 
-#: lib/bookshelf_settings.lua:925 lib/bookshelf_settings.lua:1251
+#: lib/bookshelf_settings.lua:925 lib/bookshelf_settings.lua:1257
 msgid "Chip bar font size"
 msgstr "Dimensione font barra chip"
 
@@ -629,54 +621,54 @@ msgstr ""
 msgid "Link copied to clipboard"
 msgstr ""
 
-#: lib/bookshelf_settings.lua:1147
+#: lib/bookshelf_settings.lua:1153
 msgid "Notify on wake when update available"
 msgstr "Notifica al risveglio quando è disponibile un aggiornamento"
 
-#: lib/bookshelf_settings.lua:1166
+#: lib/bookshelf_settings.lua:1172
 msgid "Update available"
 msgstr "Aggiornamento disponibile"
 
-#: lib/bookshelf_settings.lua:1169
+#: lib/bookshelf_settings.lua:1175
 msgid "Installed version"
 msgstr "Versione installata"
 
-#: lib/bookshelf_settings.lua:1175
+#: lib/bookshelf_settings.lua:1181
 msgid "Developer updates"
 msgstr "Aggiornamenti per sviluppatori"
 
-#: lib/bookshelf_settings.lua:1180 lib/bookshelf_settings.lua:1181 main.lua:991
+#: lib/bookshelf_settings.lua:1186 lib/bookshelf_settings.lua:1187 main.lua:991
 msgid "Development branch"
 msgstr "Branch di sviluppo"
 
-#: lib/bookshelf_settings.lua:1191
+#: lib/bookshelf_settings.lua:1197
 msgid "Check for updates"
 msgstr "Cerca aggiornamenti"
 
-#: lib/bookshelf_settings.lua:1192
+#: lib/bookshelf_settings.lua:1198
 msgid "Install branch"
 msgstr "Installa branch"
 
-#: lib/bookshelf_settings.lua:1198
+#: lib/bookshelf_settings.lua:1204
 msgid "Reset to latest stable release"
 msgstr "Ripristina all'ultima versione stabile"
 
-#: lib/bookshelf_settings.lua:1209 lib/bookshelf_settings.lua:1212
+#: lib/bookshelf_settings.lua:1215 lib/bookshelf_settings.lua:1218
 msgid "Installed: v"
 msgstr "Installato: v"
 
-#: lib/bookshelf_settings.lua:1255
+#: lib/bookshelf_settings.lua:1261
 msgid "Flexible chip widths"
 msgstr "Larghezza chip flessibile"
 
-#: lib/bookshelf_settings.lua:1256
+#: lib/bookshelf_settings.lua:1262
 msgid ""
 "Off: every chip gets the same width. On: each chip is sized to its label, so "
 "single-icon chips stay narrow and longer text labels get more room. Falls "
 "back to equal widths when natural sizes don't fit."
 msgstr ""
 
-#: lib/bookshelf_settings.lua:1316
+#: lib/bookshelf_settings.lua:1322
 msgid "+ Add new chip"
 msgstr "+ Aggiungi nuovo chip"
 
