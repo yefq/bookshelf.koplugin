@@ -4237,6 +4237,87 @@ end
 
 -- ─── Long-press book menu (Task 6.3) ─────────────────────────────────────────
 
+-- _buildBookMenuHeader(book) -- header widget for the long-press menu,
+-- shown above the action buttons via ButtonDialog:addWidget(). Replaces
+-- the plain text title with a cover thumbnail (when available) next to
+-- a stacked title / author / series text block. Falls back to text-only
+-- when there's no cover_bb (BIM unavailable, file just imported, etc).
+--
+-- The cover_bb is sourced from a fresh Repo.buildBookMeta() call so it's
+-- a one-time-use bb -- ImageWidget frees it after first paint, which
+-- means the bb in `book` itself (potentially shared with other UI) is
+-- never touched. Same disposable-bb invariant as the hero card.
+function BookshelfWidget:_buildBookMenuHeader(book)
+    if not book or not book.filepath then return nil end
+    local Font           = require("ui/font")
+    local ImageWidget    = require("ui/widget/imagewidget")
+    local HorizontalGroup_   = require("ui/widget/horizontalgroup")
+    local HorizontalSpan_    = require("ui/widget/horizontalspan")
+    local VerticalGroup_     = require("ui/widget/verticalgroup")
+    local TextBoxWidget_     = require("ui/widget/textboxwidget")
+
+    -- Target header width: leave generous side margin so the ButtonDialog
+    -- chrome (padding + border) doesn't push us past the screen edge.
+    local sw = Screen:getWidth()
+    local header_w = math.floor(sw * 0.82)
+    local thumb_w  = Screen:scaleBySize(72)
+    local thumb_h  = math.floor(thumb_w * 1.5)
+    local gap_w    = Size.padding.large
+
+    -- Rebuild the book record so we get an independent cover_bb that
+    -- ImageWidget can own + free (cover_bb is one-shot per the
+    -- feedback_image_disposable_shared_book memory; reusing the bb on
+    -- `book` here would tear out from under whoever painted last).
+    local fresh = Repo.buildBookMeta(book.filepath) or book
+    local thumb_widget
+    if fresh.cover_bb then
+        thumb_widget = ImageWidget:new{
+            image            = fresh.cover_bb,
+            image_disposable = true,
+            width            = thumb_w,
+            height           = thumb_h,
+            scale_factor     = 0,
+        }
+    end
+
+    local text_w = thumb_widget and (header_w - thumb_w - gap_w) or header_w
+    local text_stack = VerticalGroup_:new{ align = "left" }
+    text_stack[#text_stack + 1] = TextBoxWidget_:new{
+        text  = book.title or book.filename or _("(no title)"),
+        face  = Font:getFace("smalltfont", 18),
+        bold  = true,
+        width = text_w,
+    }
+    if book.author and book.author ~= "" then
+        text_stack[#text_stack + 1] = TextBoxWidget_:new{
+            text  = book.author,
+            face  = Font:getFace("cfont", 14),
+            width = text_w,
+        }
+    end
+    if book.series_name and book.series_name ~= "" then
+        local series_text = book.series_name
+        if book.series_num then
+            series_text = series_text .. " #" .. tostring(book.series_num)
+        end
+        text_stack[#text_stack + 1] = TextBoxWidget_:new{
+            text  = series_text,
+            face  = Font:getFace("cfont", 12),
+            width = text_w,
+        }
+    end
+
+    if not thumb_widget then
+        return text_stack
+    end
+    return HorizontalGroup_:new{
+        align = "top",
+        thumb_widget,
+        HorizontalSpan_:new{ width = gap_w },
+        text_stack,
+    }
+end
+
 -- _openBookMenu(item)
 -- item may be a Book record (from a SpineWidget tap) or a SeriesGroup record
 -- _setBookRating(book, new_rating): persist the rating to the book's
@@ -4387,6 +4468,21 @@ function BookshelfWidget:_openBookMenu(item)
             }
         end
     end
+    -- Go to folder: drill into the book's containing directory. Mirrors
+    -- the existing Author / Series / Genre rows. No tab-enabled gate --
+    -- folder drilldown works regardless of which chips the user has
+    -- enabled (it goes through _expandFolder, not through a chip).
+    local parent_dir = book.filepath and book.filepath:match("^(.*)/[^/]+$")
+    if parent_dir and parent_dir ~= "" then
+        local folder_label = parent_dir:match("([^/]+)$") or parent_dir
+        nav_rows[#nav_rows + 1] = {
+            { text = "Go to folder: " .. folder_label,
+              callback = closing(function()
+                bw._drilldown_path = {}
+                bw:_expandFolder({ path = parent_dir, label = folder_label })
+              end) },
+        }
+    end
 
     -- Build the complete buttons table before construction — ButtonDialog
     -- processes self.buttons into a ButtonTable widget synchronously in
@@ -4464,6 +4560,130 @@ function BookshelfWidget:_openBookMenu(item)
                 UIManager:setDirty(bw, "ui")
               end) },
         },
+    }
+
+    -- Tag management + force metadata refresh. Tags... delegates to
+    -- KOReader's FileManagerCollection editor (the same UI tap-tag-to-
+    -- toggle list FileManager uses) so users get one familiar surface
+    -- for collection membership. Refresh metadata wipes the cached BIM
+    -- row so the next render's _kickOffMissingMetaExtraction re-extracts.
+    buttons[#buttons + 1] = {
+        { text = "Tags\xE2\x80\xA6",
+          callback = closing(function()
+            local FileManager = require("apps/filemanager/filemanager")
+            if FileManager.instance and FileManager.instance.collections then
+                FileManager.instance.collections:onShowCollList(book.filepath, function()
+                    -- The edit may have added or removed the book from
+                    -- collections that custom chips filter on; wipe the
+                    -- per-source caches so the change surfaces without
+                    -- a manual swipe-down.
+                    Repo.invalidateBookCache("tag-edit")
+                    bw:_rebuild()
+                    UIManager:setDirty(bw, "ui")
+                end)
+            else
+                UIManager:show(require("ui/widget/infomessage"):new{
+                    text    = _("Tag editor unavailable in this context."),
+                    timeout = 3,
+                })
+            end
+          end) },
+        { text = "Refresh metadata",
+          callback = closing(function()
+            -- BookInfoManager.deleteBookInfo removes the cached SQLite
+            -- row; the next BIM read sees a miss and the chip rebuild
+            -- below queues a fresh extraction via
+            -- _kickOffMissingMetaExtraction. Wipe progress + general
+            -- book caches too so the in-memory state matches.
+            local ok_bim, BIM = pcall(require, "bookinfomanager")
+            if ok_bim and BIM and BIM.deleteBookInfo then
+                pcall(function() BIM:deleteBookInfo(book.filepath) end)
+            end
+            Repo.invalidateProgressCache(book.filepath)
+            Repo.invalidateBookCache("refresh-metadata")
+            bw:_rebuild()
+            UIManager:setDirty(bw, "ui")
+          end) },
+    }
+
+    -- Rating + Mark as new. Rating opens a sub-ButtonDialog with five
+    -- star options + Clear; tap commits via the existing _setBookRating
+    -- (same code the hero card's tap-to-rate uses). Mark as new clears
+    -- progress + last_opened while keeping the sidecar -- ratings,
+    -- highlights, and collection memberships survive. Useful for
+    -- re-readers and for "I tapped this by accident".
+    local function _ratingLabel()
+        local r = tonumber(book.rating) or 0
+        if r < 1 or r > 5 then return _("Rating: not set") end
+        local filled = ("\xE2\x98\x85"):rep(r)
+        local empty  = ("\xE2\x98\x86"):rep(5 - r)
+        return _("Rating") .. ": " .. filled .. empty
+    end
+    local function _openRatingDialog()
+        local rating_dialog
+        local function rating_close(fn)
+            return function()
+                if fn then fn() end
+                UIManager:close(rating_dialog)
+            end
+        end
+        local rows = {}
+        for i = 1, 5 do
+            local star_label = ("\xE2\x98\x85"):rep(i) .. ("\xE2\x98\x86"):rep(5 - i)
+            rows[#rows + 1] = {
+                { text = star_label, callback = rating_close(function()
+                    bw:_setBookRating(book, i)
+                end) },
+            }
+        end
+        rows[#rows + 1] = {
+            { text = _("Clear"), callback = rating_close(function()
+                bw:_setBookRating(book, nil)
+            end) },
+        }
+        rows[#rows + 1] = {
+            { text = _("Cancel"), callback = rating_close() },
+        }
+        rating_dialog = require("ui/widget/buttondialog"):new{
+            title   = _("Set rating"),
+            buttons = rows,
+        }
+        UIManager:show(rating_dialog)
+    end
+    buttons[#buttons + 1] = {
+        { text_func = _ratingLabel, callback = closing(_openRatingDialog) },
+        { text = "Mark as new",
+          callback = closing(function()
+            -- Clear progress + status in the DocSettings summary, drop
+            -- last-opened, and pull the book out of ReadHistory so it
+            -- falls out of the Recent chip. Sidecar metadata that
+            -- isn't reading-state (rating, highlights, bookmarks) is
+            -- left alone -- that's the difference from Reset.
+            local lfs = require("libs/libkoreader-lfs")
+            if lfs.attributes(book.filepath, "mode") ~= "file" then
+                UIManager:show(require("ui/widget/infomessage"):new{
+                    text    = _("File no longer exists."),
+                    timeout = 3,
+                })
+                return
+            end
+            local DocSettings = require("docsettings")
+            local ok_ds, ds = pcall(function() return DocSettings:open(book.filepath) end)
+            if ok_ds and ds then
+                ds:delSetting("percent_finished")
+                ds:delSetting("last_xp")
+                ds:delSetting("last_page")
+                local summary = ds:readSetting("summary") or {}
+                summary.status = "new"
+                ds:saveSetting("summary", summary)
+                ds:flush()
+            end
+            require("readhistory"):removeItemByPath(book.filepath)
+            Repo.invalidateProgressCache(book.filepath)
+            Repo.invalidateBookCache("mark-as-new")
+            bw:_rebuild()
+            UIManager:setDirty(bw, "ui")
+          end) },
     }
 
     -- Status row (Reading / On hold / Finished) + Reset / Delete row.
@@ -4558,9 +4778,18 @@ function BookshelfWidget:_openBookMenu(item)
     end
     buttons[#buttons + 1] = { { text = "Cancel", callback = closing() } }
     dialog = ButtonDialog:new{
-        title   = book.title or book.filename or "Book",
         buttons = buttons,
     }
+    -- Cover thumbnail + title/author/series header sits above the
+    -- button rows. addWidget appends to the dialog's title group
+    -- before the buttons render, so the visual order is
+    -- [header, buttons]. No title= field -- the header carries the
+    -- book name itself and ButtonDialog's plain-text title would just
+    -- duplicate it.
+    local header = self:_buildBookMenuHeader(book)
+    if header then
+        dialog:addWidget(header)
+    end
     UIManager:show(dialog)
 end
 
