@@ -1007,7 +1007,11 @@ function Settings:_about()
     -- Frame target: ~75% of width on phone-sized portraits, capped so it
     -- doesn't sprawl on landscape / tablet sizes.
     local frame_w = math.min(math.floor(sw * 0.8), Screen:scaleBySize(420))
-    local content_w = frame_w - Size.padding.large * 2
+    -- Inner padding: Size.padding.large (10dp) reads as cramped at this
+    -- frame size; the text edges sit ~1mm from the rounded border on
+    -- PW5. Scale up to ~24dp -- still snug but visibly breathable.
+    local FRAME_PAD = Screen:scaleBySize(24)
+    local content_w = frame_w - FRAME_PAD * 2
 
     local column = VerticalGroup:new{ align = "center" }
 
@@ -1091,7 +1095,7 @@ function Settings:_about()
     -- subtly out-of-family next to the rest of the plugin's dialogs.
     local frame = FrameContainer:new{
         radius     = Size.radius.window,
-        padding    = Size.padding.large,
+        padding    = FRAME_PAD,
         margin     = 0,
         background = Blitbuffer.COLOR_WHITE,
         column,
