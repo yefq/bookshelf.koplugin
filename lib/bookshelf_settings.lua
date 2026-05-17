@@ -960,23 +960,171 @@ function Settings:_pickLatestDepth()
     })
 end
 
+-- Strip image references from a markdown blob. The README's screenshots
+-- and logo are GitHub-hosted URLs that crengine can't fetch over the
+-- network from a Kindle, so they render as broken-image placeholders.
+-- Drop them before conversion. Handles both Markdown image syntax
+-- (![alt](src) and ![alt][ref]) and HTML <img ...> tags.
+local function _stripMarkdownImages(md)
+    if not md then return "" end
+    md = md:gsub("!%b[]%b()", "")    -- ![alt](src)
+    md = md:gsub("!%b[]%b[]", "")    -- ![alt][ref]
+    md = md:gsub("<img[^>]*>", "")   -- <img src="..." ...>
+    md = md:gsub("<picture[%s%S]-</picture>", "")  -- whole <picture> blocks
+    return md
+end
+
 function Settings:_about()
-    -- Load our own _meta.lua by absolute path. `require("_meta")` is
-    -- ambiguous because every koplugin has a _meta and they all collide
-    -- in package.path — whichever plugin loaded first wins, so the about
-    -- box was showing some OTHER plugin's metadata.
-    local plugin_dir = debug.getinfo(1, "S").source:match("@(.*/)")
+    -- Find the plugin root from this file's own path. settings.lua lives
+    -- at <plugin_dir>/lib/bookshelf_settings.lua, so strip one segment to
+    -- reach _meta.lua and README.md at the plugin root. require("_meta")
+    -- is ambiguous because every koplugin has a _meta and they all
+    -- collide in package.path -- whichever plugin loaded first wins.
+    local src = debug.getinfo(1, "S").source:match("@(.*)$")
+    local plugin_dir = src and src:match("^(.*)/lib/[^/]+%.lua$")
     local meta
     if plugin_dir then
-        local ok, m = pcall(dofile, plugin_dir .. "_meta.lua")
+        local ok, m = pcall(dofile, plugin_dir .. "/_meta.lua")
         if ok then meta = m end
     end
     local name    = (meta and meta.fullname)    or "Bookshelf"
     local version = (meta and meta.version)     or "0.1.0"
-    local desc    = (meta and meta.description) or ""
-    UIManager:show(InfoMessage:new{
-        text = string.format("%s  v%s\n\n%s", name, version, desc),
-    })
+
+    -- Load README from the plugin root. The release zip ships it
+    -- alongside _meta.lua. Fall back to the old short InfoMessage if
+    -- either the file or the markdown converter is unavailable (e.g.
+    -- a Kindle build that's stripped apps/filemanager support).
+    local readme
+    if plugin_dir then
+        local f = io.open(plugin_dir .. "/README.md", "rb")
+        if f then
+            readme = f:read("*all")
+            f:close()
+        end
+    end
+    local ok_conv, FileConverter = pcall(require, "apps/filemanager/filemanagerconverter")
+    if not readme or not ok_conv or not FileConverter or not FileConverter.mdToHtml then
+        UIManager:show(InfoMessage:new{
+            text = string.format("%s  v%s\n\n%s",
+                name, version, (meta and meta.description) or ""),
+        })
+        return
+    end
+
+    -- Prepend a version header so the user sees what's installed without
+    -- scrolling to the bottom of the README.
+    readme = "# " .. name .. " v" .. version .. "\n\n" .. _stripMarkdownImages(readme)
+
+    -- Light stylesheet tuned for e-ink: no colours, generous line height,
+    -- collapsible <details> blocks (the README's reference sections use
+    -- them; crengine renders summaries as bold rows on tap).
+    local stylesheet = [[
+        body { font-family: sans-serif; line-height: 1.4; }
+        h1 { font-size: 1.5em; margin: 0.6em 0 0.4em; }
+        h2 { font-size: 1.25em; margin: 0.6em 0 0.3em; }
+        h3 { font-size: 1.1em;  margin: 0.5em 0 0.25em; }
+        h4 { font-size: 1em;    margin: 0.4em 0 0.2em; font-weight: bold; }
+        p  { margin: 0.4em 0; }
+        ul, ol { margin: 0.3em 0 0.3em 1.4em; }
+        li { margin: 0.15em 0; }
+        code { background-color: #eee; padding: 0 0.2em; font-family: monospace; }
+        pre  { background-color: #f4f4f4; padding: 0.5em; font-family: monospace; }
+        pre code { background-color: transparent; padding: 0; }
+        table { border-collapse: collapse; margin: 0.5em 0; }
+        th, td { border: 1px solid #888; padding: 0.2em 0.5em; }
+        details { margin: 0.3em 0; }
+        details > summary { font-weight: bold; }
+        hr { border: 0; border-top: 1px solid #888; margin: 0.6em 0; }
+        blockquote { border-left: 3px solid #888; padding-left: 0.6em; margin: 0.4em 0; }
+    ]]
+    local html = FileConverter:mdToHtml(readme, name .. " README", stylesheet)
+
+    -- Inline-require the heavy widgets so the menu-tree initialization
+    -- (which happens before the user ever opens the About row) doesn't
+    -- pay the cost of pulling the HTML renderer into memory.
+    local Device           = require("device")
+    local Screen           = Device.screen
+    local Geom             = require("ui/geometry")
+    local Size             = require("ui/size")
+    local Blitbuffer       = require("ffi/blitbuffer")
+    local FrameContainer   = require("ui/widget/container/framecontainer")
+    local CenterContainer  = require("ui/widget/container/centercontainer")
+    local MovableContainer = require("ui/widget/container/movablecontainer")
+    local InputContainer   = require("ui/widget/container/inputcontainer")
+    local VerticalGroup    = require("ui/widget/verticalgroup")
+    local ScrollHtmlWidget = require("ui/widget/scrollhtmlwidget")
+    local TitleBar         = require("ui/widget/titlebar")
+    local GestureRange     = require("ui/gesturerange")
+
+    local sw, sh = Screen:getWidth(), Screen:getHeight()
+    local frame_w = math.floor(sw * 0.95)
+    local frame_h = math.floor(sh * 0.92)
+
+    local dialog
+    local title_bar = TitleBar:new{
+        width            = frame_w,
+        title            = name .. " " .. _("README"),
+        close_callback   = function() UIManager:close(dialog) end,
+        with_bottom_line = true,
+    }
+    local title_h = title_bar:getSize().h
+    local body_h  = frame_h - title_h - Size.padding.large * 2
+
+    local html_widget = ScrollHtmlWidget:new{
+        html_body         = html,
+        width             = frame_w - Size.padding.large * 2,
+        height            = body_h,
+        default_font_size = Screen:scaleBySize(15),
+    }
+
+    local frame = FrameContainer:new{
+        bordersize = Size.border.thin,
+        padding    = Size.padding.large,
+        margin     = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        VerticalGroup:new{
+            align = "left",
+            title_bar,
+            html_widget,
+        },
+    }
+
+    dialog = InputContainer:new{
+        align = "center",
+        dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh },
+        CenterContainer:new{
+            dimen = Geom:new{ w = sw, h = sh },
+            MovableContainer:new{ frame },
+        },
+    }
+    if Device:isTouchDevice() then
+        dialog.ges_events = {
+            TapClose = { GestureRange:new{
+                ges   = "tap",
+                range = Geom:new{ x = 0, y = 0, w = sw, h = sh },
+            } },
+        }
+        dialog.onTapClose = function(self_d, _arg, ges_ev)
+            if not frame.dimen or ges_ev.pos:notIntersectWith(frame.dimen) then
+                UIManager:close(self_d)
+            end
+            return true
+        end
+    end
+    if Device:hasKeys() then
+        dialog.key_events = { Close = { { Device.input.group.Back } } }
+        dialog.onClose = function(self_d)
+            UIManager:close(self_d)
+            return true
+        end
+    end
+
+    -- ScrollHtmlWidget reaches back through self.dialog when a long-press
+    -- on text triggers selection highlighting; wire it up so the highlight
+    -- can call setDirty against the dialog container.
+    html_widget.dialog = dialog
+
+    UIManager:show(dialog)
 end
 
 -- _updateSubItems() — drill-down menu for the in-app updater. Mirrors
