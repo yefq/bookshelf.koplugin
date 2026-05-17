@@ -1009,23 +1009,29 @@ function Settings:_about()
 
     local column = VerticalGroup:new{ align = "center" }
 
-    -- Logo at the top, centred. Uses ImageWidget with scale_factor=0
-    -- so it scales to fit logo_w while keeping aspect. The height passed
-    -- to ImageWidget is a sentinel max -- scale_factor=0 ignores it
-    -- once the width fits.
+    -- Logo at the top, centred. The PNG is 900x380 (2.37:1) with a
+    -- transparent background, so we MUST pass alpha=true -- the
+    -- default (alpha=false) ignores the alpha channel and renders the
+    -- transparent area as opaque black. Width caps at content_w or
+    -- ~220dp, whichever is smaller; height is derived from the image's
+    -- native aspect so the widget doesn't reserve a tall square box
+    -- with empty vertical bands above and below the actual logo.
+    local LOGO_NATIVE_W, LOGO_NATIVE_H = 900, 380
     if plugin_dir then
         local logo_path = plugin_dir .. "/assets/bookshelf-logo.png"
         local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
         if ok_lfs and lfs and lfs.attributes and lfs.attributes(logo_path) then
             local ImageWidget = require("ui/widget/imagewidget")
-            local logo_w = math.min(content_w, Screen:scaleBySize(240))
+            local logo_w = math.min(content_w, Screen:scaleBySize(220))
+            local logo_h = math.floor(logo_w * LOGO_NATIVE_H / LOGO_NATIVE_W)
             column[#column + 1] = ImageWidget:new{
                 file         = logo_path,
                 width        = logo_w,
-                height       = math.floor(logo_w),  -- upper bound; scale_factor=0 picks the actual
+                height       = logo_h,
                 scale_factor = 0,
+                alpha        = true,
             }
-            column[#column + 1] = VerticalSpan:new{ width = Size.padding.large }
+            column[#column + 1] = VerticalSpan:new{ width = Size.padding.default }
         end
     end
 
@@ -1034,14 +1040,14 @@ function Settings:_about()
         face = Font:getFace("smalltfont", 22),
         bold = true,
     }
-    column[#column + 1] = VerticalSpan:new{ width = Size.padding.default }
+    column[#column + 1] = VerticalSpan:new{ width = Size.padding.small }
     column[#column + 1] = TextBoxWidget:new{
         text      = description,
         face      = Font:getFace("cfont", 16),
         width     = content_w,
         alignment = "center",
     }
-    column[#column + 1] = VerticalSpan:new{ width = Size.padding.large }
+    column[#column + 1] = VerticalSpan:new{ width = Size.padding.default }
     column[#column + 1] = TextWidget:new{
         text = GITHUB_URL,
         face = Font:getFace("cfont", 14),
