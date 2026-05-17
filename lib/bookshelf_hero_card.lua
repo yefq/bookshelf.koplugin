@@ -128,14 +128,104 @@ local function regionFace(region)
     return fontFace(region.font_face, region.font_size)
 end
 
--- Build a TextBoxWidget for a single region using the resolved settings.
+-- _labelSegments(text) -- classify a UTF-8 string into runs of "ascii"
+-- (bytes < 0x80, plain text) and "icon" (multi-byte sequences, typically
+-- nerd-font / emoji glyphs). Mirrors the same helper in
+-- bookshelf_chip_bar.lua. Used so a bold region containing icon glyphs
+-- can render the text segments bold while leaving the icons at the
+-- font's native weight -- faux-bolding nerd-font glyphs renders them as
+-- a blobby mess on e-ink.
+local function _labelSegments(label)
+    local segments = {}
+    local current = nil
+    local i = 1
+    while i <= #label do
+        local b = string.byte(label, i)
+        local class, chunk_len
+        if b < 0x80 then
+            class, chunk_len = "ascii", 1
+        elseif b < 0xC0 then
+            -- Continuation byte at start = malformed UTF-8. Consume one
+            -- byte so we don't infinite-loop on bad input.
+            class, chunk_len = "icon", 1
+        elseif b < 0xE0 then
+            class, chunk_len = "icon", 2
+        elseif b < 0xF0 then
+            class, chunk_len = "icon", 3
+        else
+            class, chunk_len = "icon", 4
+        end
+        local chunk = label:sub(i, i + chunk_len - 1)
+        if current and current.class == class then
+            current.text = current.text .. chunk
+        else
+            current = { class = class, text = chunk }
+            segments[#segments + 1] = current
+        end
+        i = i + chunk_len
+    end
+    return segments
+end
+
+-- _buildSegmentedInline(text, face, bold) -- returns a single widget
+-- (TextWidget if homogeneous, HorizontalGroup of TextWidgets if the
+-- text mixes ascii + icon segments). When bold is false the function
+-- short-circuits to a plain TextWidget regardless of content -- the
+-- whole point of segmenting is to keep glyphs out of the bold path,
+-- so non-bold lines have nothing to gain. The returned widget always
+-- has a getSize() so callers' width math works.
+local function _buildSegmentedInline(text, face, bold)
+    if not bold or not text:find("[\x80-\xFF]") then
+        return TextWidget:new{ text = text, face = face, bold = bold or false }
+    end
+    local segments = _labelSegments(text)
+    if #segments <= 1 then
+        return TextWidget:new{ text = text, face = face, bold = bold }
+    end
+    local hg = HorizontalGroup:new{ align = "center" }
+    for _i, seg in ipairs(segments) do
+        hg[#hg + 1] = TextWidget:new{
+            text = seg.text,
+            face = face,
+            bold = seg.class == "ascii",
+        }
+    end
+    return hg
+end
+
+-- Build a widget for a single region using the resolved settings. Uses
+-- TextBoxWidget for the normal multi-line wrapping case. Switches to a
+-- segmented HorizontalGroup when the region is bold AND the rendered
+-- text contains nerd-font / emoji glyphs AND it's a single line --
+-- keeps the glyphs at the font's native weight while bolding the
+-- surrounding text. (TextBoxWidget can't do per-segment bold, so the
+-- segmented path loses line wrapping; reserved for short single-line
+-- content like the status clock line, which is the common case for
+-- icon-bearing region templates.)
 local function buildText(text, region, width)
     local rendered = text
     if region.uppercase then rendered = rendered:upper() end
+    local face = regionFace(region)
+    local is_bold = region.bold or false
+    if is_bold and rendered:find("[\x80-\xFF]") and not rendered:find("\n") then
+        local segments = _labelSegments(rendered)
+        if #segments > 1 then
+            local hg = HorizontalGroup:new{ align = "center" }
+            for _i, seg in ipairs(segments) do
+                hg[#hg + 1] = TextWidget:new{
+                    text    = seg.text,
+                    face    = face,
+                    bold    = seg.class == "ascii",
+                    fgcolor = Blitbuffer.COLOR_BLACK,
+                }
+            end
+            return hg
+        end
+    end
     return TextBoxWidget:new{
         text      = rendered,
-        face      = regionFace(region),
-        bold      = region.bold or false,
+        face      = face,
+        bold      = is_bold,
         width     = width,
         alignment = region.alignment or "left",
     }
@@ -223,13 +313,13 @@ buildLine = function(expanded, region, width, book)
     local b_widget = nil
     if before ~= "" then
         local display = region.uppercase and before:upper() or before
-        b_widget = TextWidget:new{ text = display, face = face, bold = region.bold or false }
+        b_widget = _buildSegmentedInline(display, face, region.bold or false)
         used_w = used_w + b_widget:getSize().w
     end
     local a_widget = nil
     if after ~= "" then
         local display = region.uppercase and after:upper() or after
-        a_widget = TextWidget:new{ text = display, face = face, bold = region.bold or false }
+        a_widget = _buildSegmentedInline(display, face, region.bold or false)
         used_w = used_w + a_widget:getSize().w
     end
 
