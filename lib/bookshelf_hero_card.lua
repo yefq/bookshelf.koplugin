@@ -7,6 +7,8 @@ local FrameContainer  = require("ui/widget/container/framecontainer")
 local BookshelfSettings = require("lib/bookshelf_settings_store")
 local InputContainer  = require("ui/widget/container/inputcontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
+local LeftContainer   = require("ui/widget/container/leftcontainer")
+local RightContainer  = require("ui/widget/container/rightcontainer")
 local TopContainer    = require("ui/widget/container/topcontainer")
 local BottomContainer = require("ui/widget/container/bottomcontainer")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
@@ -219,7 +221,19 @@ local function buildText(text, region, width)
                     fgcolor = Blitbuffer.COLOR_BLACK,
                 }
             end
-            return hg
+            -- HorizontalGroup doesn't honour region.alignment the way
+            -- TextBoxWidget does -- it just sits at its natural width.
+            -- Wrap in the matching alignment container sized to the
+            -- region's allotted width so center / right alignment work.
+            local alignment = region.alignment or "left"
+            local hg_h = hg:getSize().h
+            local dimen = Geom:new{ w = width, h = hg_h }
+            if alignment == "center" then
+                return CenterContainer:new{ dimen = dimen, hg }
+            elseif alignment == "right" then
+                return RightContainer:new{ dimen = dimen, hg }
+            end
+            return LeftContainer:new{ dimen = dimen, hg }
         end
     end
     return TextBoxWidget:new{
