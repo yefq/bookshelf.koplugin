@@ -4754,6 +4754,15 @@ function BookshelfWidget:_openBookMenu(item)
             return function()
                 if fn then fn() end
                 UIManager:close(rating_dialog)
+                -- Refresh the outer book menu so the Rating button's
+                -- text_func re-evaluates against book.rating (which
+                -- _setBookRating just mutated). Without this the book
+                -- menu stays open showing the OLD star count -- the
+                -- text_func only fires at dialog construction time.
+                if dialog and dialog.reinit then
+                    dialog:reinit()
+                    UIManager:setDirty(dialog, "ui")
+                end
             end
         end
         local rows = {}
@@ -4779,9 +4788,13 @@ function BookshelfWidget:_openBookMenu(item)
         }
         UIManager:show(rating_dialog)
     end
+    -- Rating button callback does NOT close the outer menu -- the
+    -- sub-dialog opens on top, the user picks (or cancels), and on
+    -- close the rating sub-dialog reinits the outer menu so the
+    -- Rating button text reflects the new value in place.
     local rating_button = {
         text_func = _ratingLabel,
-        callback  = closing(_openRatingDialog),
+        callback  = _openRatingDialog,
     }
 
     -- Mark as new: state-only reset (different from full Reset which
