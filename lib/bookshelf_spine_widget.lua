@@ -49,15 +49,20 @@ local function _glyphSize(card_w)
 end
 
 -- Vertical placement of the in-progress glyph relative to the card.
--- The glyph's top sits at (card_h - glyph_h * GLYPH_TOP_LIFT_*).
---   * < 1.0 -> glyph dangles below the card (1 - lift fraction of glyph_h)
+-- The glyph's top sits at (card_h - widget_h * GLYPH_TOP_LIFT_*),
+-- where widget_h is the TextWidget's MEASURED height (accounts for
+-- font ascent/descent + line-height overhead, ~1.3-1.4 × face size).
+--   * < 1.0 -> glyph dangles below the card (1 - lift fraction of widget_h)
 --   * = 1.0 -> glyph bottom touches card bottom
---   * > 1.0 -> glyph fully inside card, lift-1 fraction above card bottom
--- Regular grid: a bit of dangle gives the cover a marker-sticking-out
--- character. Expanded (title) view: keep the glyph fully inside the
--- cover so it doesn't crowd the title text below.
-local GLYPH_TOP_LIFT_REGULAR  = 1.10
-local GLYPH_TOP_LIFT_EXPANDED = 1.55
+--   * > 1.0 -> glyph fully inside card, (lift-1) fraction above bottom
+--
+-- Both regular and expanded (3-row) modes share the same 0.50 lift:
+-- the progress bar paints on top of the glyph, hiding the in-card
+-- portion, so visibility relies entirely on the dangle. 50% of the
+-- widget below card_h gives a recognisable bookmark shape (V-cut tip
+-- + a slab of the rectangular body) at every DPI, in every mode.
+local GLYPH_TOP_LIFT_REGULAR  = 0.50
+local GLYPH_TOP_LIFT_EXPANDED = 0.50
 local function _glyphTopLift(show_titles)
     if show_titles then return GLYPH_TOP_LIFT_EXPANDED end
     return GLYPH_TOP_LIFT_REGULAR
@@ -405,8 +410,16 @@ function SpineWidget:_renderShadowedCard(inner)
         if glyph_w <= card_w * 0.4 then
             local glyph = CoverProgress.buildGlyphWidget(
                 CoverProgress.GLYPH_BOOKMARK, glyph_h, colours.fill)
+            -- Use the TextWidget's ACTUAL rendered height for the
+            -- offset math, not the nominal face size. A
+            -- Font:getFace("symbols", N) widget paints at roughly
+            -- N * 1.3-1.4 (ascent + descent + line-height padding),
+            -- so a lift computed from N alone over-shoots and the
+            -- glyph dangles below the card. Measuring after build
+            -- keeps the lift math accurate at any DPI.
+            local widget_h = glyph:getSize().h
             local lift = _glyphTopLift(self.show_titles)
-            local y_offset = card_h - math.floor(glyph_h * lift + 0.5)
+            local y_offset = card_h - math.floor(widget_h * lift + 0.5)
             children[#children + 1] = FrameContainer:new{
                 bordersize   = 0,
                 padding      = 0,
@@ -424,25 +437,51 @@ function SpineWidget:_renderShadowedCard(inner)
     --    glyph (bottom-left, lifted by GLYPH_TOP_LIFT), but white with a
     --    black halo so the hollow check stays legible against any cover.
     if indicators.glyph == "complete" then
-        local glyph_h = _glyphSize(card_w)
-        local glyph_w = self:_glyphWidth(glyph_h)
-        if glyph_w <= card_w * 0.4 then
-            local halo_w = 1
-            local outlined = CoverProgress.buildOutlinedGlyphWidget(
-                CoverProgress.GLYPH_BOOKMARK_CHECK, glyph_h, halo_w)
-            -- Offset by -halo_w so the glyph's CENTRE aligns with the
-            -- in-progress glyph's position (outlined widget is 2*halo_w
-            -- larger on each axis).
-            local lift = _glyphTopLift(self.show_titles)
-            local y_offset = card_h - math.floor(glyph_h * lift + 0.5)
-            children[#children + 1] = FrameContainer:new{
-                bordersize   = 0,
-                padding      = 0,
-                padding_top  = y_offset - halo_w,
-                padding_left = _glyphLeftInset() - halo_w,
-                outlined,
-            }
-        end
+        -- New design: a flat pill at bottom-LEFT matching the
+        -- page-count pill's visual language (thin border, white
+        -- background, slight radius), containing the nerd-font check
+        -- glyph (U+F42E) instead of an outlined-bookmark dangle. The
+        -- finished cover has no progress bar to anchor a dangling
+        -- glyph against, so a pill reads cleaner. Bottom edge sits on
+        -- the same baseline the in-progress bar uses so finished and
+        -- in-progress covers share a visual rhythm.
+        local TextWidget = require("ui/widget/textwidget")
+        local Font       = require("ui/font")
+        local check_widget = TextWidget:new{
+            text = "\xEF\x90\xAE",   -- U+F42E nerd-font check
+            face = Font:getFace("smallinfofont", 12),
+            bold = true,
+        }
+        -- The check glyph has no descender, so a TextWidget with
+        -- padding_top=padding_bottom=0 (the page-count "p123" pill's
+        -- spec) renders the glyph in the upper portion of its
+        -- bounding box, leaving the descender area empty -- looks
+        -- like the check sits high. Add a small top-side bias so the
+        -- glyph's visual centre lands at the pill's vertical centre.
+        local pill = FrameContainer:new{
+            bordersize     = Size.border.thin,
+            background     = Blitbuffer.COLOR_WHITE,
+            radius         = Screen:scaleBySize(3),
+            padding_left   = Size.padding.small,
+            padding_right  = Size.padding.small,
+            padding_top    = Screen:scaleBySize(2),
+            padding_bottom = 0,
+            check_widget,
+        }
+        local sz       = pill:getSize()
+        local pill_h   = sz.h
+        local bar_pad  = _barBottomPadding()
+        local side     = _barSideMargin()
+        local pill_y   = card_h - CARD_BORDER - bar_pad - pill_h
+        local pill_x   = CARD_BORDER + side
+        if pill_y < CARD_BORDER then pill_y = CARD_BORDER end
+        children[#children + 1] = FrameContainer:new{
+            bordersize   = 0,
+            padding      = 0,
+            padding_top  = pill_y,
+            padding_left = pill_x,
+            pill,
+        }
     end
 
     -- 5. Page count and / or progress bar at the bottom of the cover.
