@@ -28,7 +28,8 @@ A friendly home screen for KOReader. Browse your library by series, author, genr
    | Kobo | `/mnt/onboard/.adds/koreader/plugins/` |
    | Android | `<koreader-dir>/plugins/` |
 
-3. Restart KOReader. Bookshelf opens automatically as your new home screen.
+3. Restart KOReader.
+4. Open KOReader's menu and set **Start with -> Bookshelf**. Without this, KOReader opens its standard file browser on launch; you can still open Bookshelf manually from the menu.
 
 > **You also need CoverBrowser enabled** (Settings -> More plugins -> CoverBrowser). It supplies the covers and metadata Bookshelf uses. If it's disabled, Bookshelf shows a one-time notice and steps aside to KOReader's standard file browser.
 
