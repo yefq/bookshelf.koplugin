@@ -29,6 +29,7 @@ local SpineWidget     = require("lib/bookshelf_spine_widget")
 local Tokens          = require("lib/bookshelf_tokens")
 local Regions         = require("lib/bookshelf_hero_regions")
 local HeroBar         = require("lib/bookshelf_hero_bar")
+local CoverProgress   = require("lib/bookshelf_cover_progress")
 local TextSegments    = require("lib/bookshelf_text_segments")
 local RenderText      = require("ui/rendertext")
 
@@ -451,11 +452,22 @@ buildLine = function(expanded, region, width, book)
         local bar_pct   = region.bar_height or 100
         local bar_h     = math.max(2, math.floor(face_size * bar_pct / 100 + 0.5))
         local pct       = book and book.book_pct or 0
+        -- Honour the user's Progress bar / Progress bar track colour picks
+        -- here just like SpineWidget does on the cover bar. bookends's
+        -- paintProgressBar takes the read colour as `fill` and the unread
+        -- (track) colour as `bg`; our DEFAULT_FILL / DEFAULT_TRACK already
+        -- match its built-in defaults so we can pass the resolved values
+        -- unconditionally without disturbing the no-override look.
+        local bar_colours = CoverProgress.resolvedColours()
         elastic_widget = HeroBar:new{
             width      = elastic_w,
             height     = bar_h,
             percentage = pct,
             style      = region.bar_style or "bordered",
+            colors     = {
+                fill = bar_colours.fill,
+                bg   = bar_colours.track,
+            },
         }
     else  -- "spacer"
         elastic_widget = HorizontalSpan:new{ width = elastic_w }
