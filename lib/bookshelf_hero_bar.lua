@@ -33,20 +33,47 @@ local function loadBookendsPaint()
     return mod.paintProgressBar
 end
 
--- Style sets exposed in the line editor's bar-style cycle button. The
--- bookends list is a superset; the fallback keeps it to two real styles.
--- Radial / radial_hollow are deliberately excluded — bookshelf's hero
--- progress bar is a horizontal-strip context where a circle dial reads
--- as out-of-place; bookends still has them for its own status-line use.
-HeroBar.BOOKENDS_STYLES = {
-    "bordered", "solid", "rounded", "metro", "wavy",
+-- Styles excluded from bookshelf's hero strip even when bookends supports
+-- them. Radial / radial_hollow are circular dials and look out of place
+-- in a horizontal strip context. Anything not listed here flows through
+-- automatically as bookends adds new styles.
+HeroBar.EXCLUDED_STYLES = {
+    radial        = true,
+    radial_hollow = true,
 }
+
+-- Snapshot of bookends's BAR_STYLES at the time this version of bookshelf
+-- shipped. Used as a fallback when the installed bookends version is too
+-- old to export OverlayWidget.BAR_STYLES (anything pre-v2.x). Bookends
+-- versions that DO export the table get read directly — new styles
+-- bookends adds in the future show up here without a bookshelf change.
+HeroBar.BOOKENDS_FALLBACK = {
+    "bordered", "solid", "rounded", "metro", "wavy",
+    "radial", "radial_hollow", "pacman",
+}
+
 HeroBar.FALLBACK_STYLES = { "bordered", "solid" }
 
--- Returns the cycle-list applicable for the active backend.
+-- Returns the cycle-list applicable for the active backend. When bookends
+-- is installed and exports BAR_STYLES, use that (so any future novelty
+-- style auto-appears); otherwise the local snapshot. Either way, filter
+-- through EXCLUDED_STYLES.
 function HeroBar.availableStyles()
-    if loadBookendsPaint() then return HeroBar.BOOKENDS_STYLES end
-    return HeroBar.FALLBACK_STYLES
+    if not loadBookendsPaint() then return HeroBar.FALLBACK_STYLES end
+    local all
+    local ok, mod = pcall(require, "bookends_overlay_widget")
+    if ok and type(mod) == "table" and type(mod.BAR_STYLES) == "table" then
+        all = mod.BAR_STYLES
+    else
+        all = HeroBar.BOOKENDS_FALLBACK
+    end
+    local out = {}
+    for _, s in ipairs(all) do
+        if not HeroBar.EXCLUDED_STYLES[s] then
+            out[#out + 1] = s
+        end
+    end
+    return out
 end
 
 -- Paintable widget that delegates to bookends's paintProgressBar.
