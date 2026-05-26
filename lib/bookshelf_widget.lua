@@ -352,9 +352,32 @@ function BookshelfWidget:handleEvent(event)
         local ev = event.args[1]
         local user_gestures = (fm.gestures and fm.gestures.gestures) or {}
 
+        -- Walk every FM module's touch zones, not just fm + fm.menu.
+        -- KOReader v2026.03 on Kobo / SimpleUI navbar setups registers
+        -- the menu-open zones (filemanager_tap / _ext_tap / _swipe) on
+        -- FM modules other than fm.menu, which the old fm + fm.menu
+        -- walk missed entirely -- leaving the user unable to open the
+        -- KOReader menu from inside bookshelf (issue #79).
+        --
+        -- FileManager:registerModule (filemanager.lua:385) stores each
+        -- module both at self[name] AND via table.insert(self, ...), so
+        -- ipairs(fm) reaches every registered module in registration
+        -- order. We collect each module's _ordered_touch_zones.
+        --
+        -- Explicit exception: fm.file_chooser. It's the Menu widget for
+        -- the file list painted underneath bookshelf; its row-tap /
+        -- row-hold zones cover the body area, so a tap in a gap of
+        -- bookshelf's layout could otherwise open an unintended file.
+        -- The filemanager_* prefix filter below is a secondary safety
+        -- net (file_chooser zones have generic Menu IDs), but excluding
+        -- it explicitly keeps the contract obvious.
         local zone_lists = { fm._ordered_touch_zones }
-        if fm.menu and fm.menu._ordered_touch_zones then
-            zone_lists[#zone_lists + 1] = fm.menu._ordered_touch_zones
+        for _, child in ipairs(fm) do
+            if child ~= fm.file_chooser
+               and type(child) == "table"
+               and child._ordered_touch_zones then
+                zone_lists[#zone_lists + 1] = child._ordered_touch_zones
+            end
         end
         for _i, zones in ipairs(zone_lists) do
             for _i, tzone in ipairs(zones) do
