@@ -1702,6 +1702,15 @@ function BookshelfWidget:_rebuild()
     self:_persistNavState()
     logger.dbg(string.format("[bookshelf perf] _rebuild: persist=%.0fms",
         (_gettime() - _perf_persist_t0) * 1000))
+    -- Proactive forward preload. The reactive preload (in _paginateNext/Prev)
+    -- can't arm until a swipe reveals direction, so the FIRST page-turn after
+    -- any rebuild is always a cold cover decode. From a freshly-settled page
+    -- the user's likeliest next action is a forward swipe, so warm the next
+    -- page now. No-op on the last page; _schedulePreload cancels any prior
+    -- preload, re-syncs cache capacity, and is Android-gated internally.
+    if (self._total_pages or 1) > (self.page or 1) then
+        self:_schedulePreload(1)
+    end
 end
 
 -- ─── Background metadata extraction ──────────────────────────────────────────
@@ -5412,7 +5421,12 @@ function BookshelfWidget:_currentSlotDims()
     if not d or not d.content_w then return nil end
     local n = self:_nCols()
     if not n or n < 1 then return nil end
-    local sw = math.floor((d.content_w - (d.PAD or 0) * (n - 1)) / n)
+    -- Must match the render's slot maths (see _rebuild / _swapShelvesInPlace),
+    -- which divides by book_gap, not PAD. At the "small" bookshelf size
+    -- book_gap < PAD so the render slot is wider; warming covers at the
+    -- PAD-based (narrower) size here makes _renderCover's width check reject
+    -- them and re-decode synchronously at page-turn time -- defeating preload.
+    local sw = math.floor((d.content_w - (d.book_gap or d.PAD or 0) * (n - 1)) / n)
     if sw < 1 then return nil end
     return sw, math.floor(sw * 1.5)
 end
@@ -5927,6 +5941,39 @@ function BookshelfWidget:onTakeScreenshotSwipe()
     return self:_dispatchScreenshot()
 end
 
+-- Diagnostic: latency from the swipe gesture's own timestamp (set by the
+-- GestureDetector) to this handler firing -- i.e. the detection + dispatch
+-- portion of a page turn. The pagination work itself is timed separately by
+-- _paginateNext/_paginatePrev's "[bookshelf perf] paginate" line, so the two
+-- together cover swipe-to-repaint.
+--
+-- ges.time's CLOCK SOURCE is platform-dependent: KOReader's GestureDetector
+-- stamps it from whatever InputEvent carries (realtime/epoch on the Kindle MTK
+-- input stack, monotonic on SDL). So we can't assume it matches time.now()
+-- (monotonic) -- subtracting the wrong base gave a -1.7e12 ms reading on the
+-- Kindle. Instead, try each available "now" clock and keep the first delta
+-- that lands in a sane page-turn window; the mismatched clock yields a wildly
+-- out-of-range value and is discarded. dbg level: enable debug logging to see.
+function BookshelfWidget:_logSwipeLatency(dir, ges)
+    if not (ges and ges.time) then return end
+    local ok, ms = pcall(function()
+        local time = require("ui/time")
+        local nows = {}
+        if time.now then nows[#nows + 1] = time.now() end
+        if time.realtime_coarse then nows[#nows + 1] = time.realtime_coarse() end
+        if time.realtime then nows[#nows + 1] = time.realtime() end
+        for _i = 1, #nows do
+            local v = time.to_ms(nows[_i] - ges.time)
+            if v >= 0 and v < 5000 then return v end
+        end
+        return nil
+    end)
+    if ok and ms then
+        logger.dbg(string.format(
+            "[bookshelf swipe] dir=%s gesture->handler=%.0fms", dir, ms))
+    end
+end
+
 function BookshelfWidget:onSwipeNextPage(_, ges)
     -- Hero-area swipe: cycle preview to next book. Stays inside the
     -- chip; pages flip automatically when the next book lives on a
@@ -5935,6 +5982,7 @@ function BookshelfWidget:onSwipeNextPage(_, ges)
         self:_previewNeighbourBook(1)
         return true
     end
+    self:_logSwipeLatency("next", ges)
     return self:_paginateNext()
 end
 
@@ -5943,6 +5991,7 @@ function BookshelfWidget:onSwipePrevPage(_, ges)
         self:_previewNeighbourBook(-1)
         return true
     end
+    self:_logSwipeLatency("prev", ges)
     return self:_paginatePrev()
 end
 

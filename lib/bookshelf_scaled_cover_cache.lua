@@ -52,20 +52,54 @@ local logger = require("logger")
 -- only re-extracts thumbnails on user-initiated metadata refresh
 -- (out of band; bookshelf doesn't poke this cache from those paths).
 
+-- Resident byte size of a scaled cover bb. `stride` is the bytes-per-row of
+-- the underlying C allocation, so `stride * h` is the true RAM footprint
+-- INCLUDING any row padding -- and it scales correctly with both cover
+-- dimensions and bit depth (1 byte/px on grayscale e-ink vs 4 bytes/px RGB32
+-- on a colour panel) without the cache having to know the device type. This
+-- is why the cache bounds memory by BYTES, not entry count: "128 covers" is
+-- ~8 MiB of small grayscale shelf covers but could be ~150 MiB of large
+-- colour hero covers -- the same number, wildly different RAM.
+local function _bbBytes(bb)
+    if not bb then return 0 end
+    local ok, n = pcall(function()
+        local h = (bb.getHeight and bb:getHeight()) or tonumber(bb.h) or 0
+        local stride = tonumber(bb.stride)
+        if stride and h > 0 then return stride * h end
+        local w   = (bb.getWidth and bb:getWidth()) or 0
+        local bpp = (bb.getBpp and bb:getBpp()) or 8
+        return w * h * math.ceil(bpp / 8)
+    end)
+    return (ok and n) or 0
+end
+
 local ScaledCoverCache = {
-    _capacity = 32,    -- ~6 MiB at 500×750×4 bytes; well within Kindle RAM
+    -- Two bounds, both enforced on every put (see _evictIfNeeded):
+    --   * _capacity   -- soft cap on entry COUNT (the user's cover_cache_size
+    --                    setting). Lets the user tune working-set size.
+    --   * _byte_budget -- HARD cap on resident bytes. The real RAM safety net:
+    --                    a fixed entry count can't bound RAM because per-entry
+    --                    size varies ~5x (shelf vs hero) and ~4x (grayscale vs
+    --                    colour). 24 MiB holds ~370 grayscale shelf covers but
+    --                    self-limits to ~20-40 large colour covers -- safe on
+    --                    every device with the same constant.
+    _capacity    = 32,
+    _byte_budget = 24 * 1024 * 1024,
+    _bytes       = 0,  -- running sum of resident entry bytes (see _sizes)
     _cache    = {},    -- filepath → bb
     _order    = {},    -- list of filepaths, oldest at front, MRU at back
+    _sizes    = {},    -- filepath → bytes, so evict/replace adjust _bytes O(1)
     _hits     = 0,     -- perf: cache hits this session
     _puts     = 0,     -- perf: cache misses (scales) this session
     _evictions= 0,     -- perf: evictions this session
 }
 
--- setCapacity(n) — change the max number of cached covers. Raising it
--- lets more covers (e.g. preloaded next-page / other-chip covers) stay
--- resident; lowering it evicts down to the new size immediately. Each
--- entry is ~187 KiB at standard shelf dims, so memory scales linearly --
--- the caller (settings) bounds n to a Kindle-safe range.
+-- setCapacity(n) — soft cap on entry COUNT. Raising it lets more covers
+-- (e.g. preloaded next-page / other-chip covers) stay resident; lowering it
+-- evicts down immediately. This is the user-facing knob, but it is NOT the
+-- RAM bound: _byte_budget (the hard ceiling enforced alongside it) is what
+-- actually keeps memory safe regardless of how large the cached covers are.
+-- So a generous count is safe to set -- the byte budget catches it.
 function ScaledCoverCache:setCapacity(n)
     n = tonumber(n)
     if not n then return end
@@ -73,6 +107,20 @@ function ScaledCoverCache:setCapacity(n)
     if n < 1 then n = 1 end
     if n == self._capacity then return end
     self._capacity = n
+    self:_evictIfNeeded()
+end
+
+-- setByteBudget(bytes) — hard cap on total resident cover bytes. Optional
+-- override of the 24 MiB default; the caller (settings) may expose this so a
+-- user with a large-RAM colour device can raise it, or a tight device lower
+-- it. Evicts immediately if the new budget is smaller than current usage.
+function ScaledCoverCache:setByteBudget(bytes)
+    bytes = tonumber(bytes)
+    if not bytes then return end
+    bytes = math.floor(bytes)
+    if bytes < 1 then return end
+    if bytes == self._byte_budget then return end
+    self._byte_budget = bytes
     self:_evictIfNeeded()
 end
 
@@ -86,15 +134,24 @@ function ScaledCoverCache:_removeKey(key)
 end
 
 function ScaledCoverCache:_evictIfNeeded()
-    while #self._order > self._capacity do
+    -- Evict oldest until BOTH bounds hold: entry count <= capacity AND
+    -- resident bytes <= byte budget. Keep at least the most-recently inserted
+    -- entry (#order > 1 guard) so a single oversized cover can't evict itself
+    -- and a freshly-cached page cover is never yanked out from under its paint.
+    while #self._order > 1
+          and (#self._order > self._capacity or self._bytes > self._byte_budget) do
         local key = table.remove(self._order, 1)
         -- Drop the cache's reference only. Don't call bb:free() — see
         -- lifetime note above; ImageWidgets that still hold this bb
         -- would render garbage pixels on the next paint.
         self._cache[key] = nil
+        self._bytes = self._bytes - (self._sizes[key] or 0)
+        if self._bytes < 0 then self._bytes = 0 end
+        self._sizes[key] = nil
         self._evictions = self._evictions + 1
-        logger.dbg(string.format("[bookshelf perf] ScaledCoverCache: EVICT fp=%s size=%d/%d",
-            key, #self._order, self._capacity))
+        logger.dbg(string.format(
+            "[bookshelf perf] ScaledCoverCache: EVICT fp=%s size=%d/%d bytes=%d/%d",
+            key, #self._order, self._capacity, self._bytes, self._byte_budget))
     end
 end
 
@@ -161,17 +218,26 @@ function ScaledCoverCache:put(filepath, bb)
         -- New is larger; replace cache reference. Do NOT free existing
         -- — other live widgets may still hold it (see lifetime note at
         -- top of module). LuaJIT will reclaim when the last reference
-        -- drops.
+        -- drops. Drop the old entry's byte accounting; the new size is
+        -- added below.
         self:_removeKey(filepath)
+        self._bytes = self._bytes - (self._sizes[filepath] or 0)
+        if self._bytes < 0 then self._bytes = 0 end
+        self._sizes[filepath] = nil
     end
     self._cache[filepath] = bb
     self._order[#self._order + 1] = filepath
+    local nbytes = _bbBytes(bb)
+    self._sizes[filepath] = nbytes
+    self._bytes = self._bytes + nbytes
     self._puts = self._puts + 1
-    logger.dbg(string.format("[bookshelf perf] ScaledCoverCache: PUT fp=%s %dx%d size=%d/%d hits=%d puts=%d",
+    logger.dbg(string.format(
+        "[bookshelf perf] ScaledCoverCache: PUT fp=%s %dx%d size=%d/%d bytes=%d/%d hits=%d puts=%d",
         filepath,
         (bb.getWidth and bb:getWidth() or 0),
         (bb.getHeight and bb:getHeight() or 0),
-        #self._order, self._capacity, self._hits, self._puts))
+        #self._order, self._capacity, self._bytes, self._byte_budget,
+        self._hits, self._puts))
     self:_evictIfNeeded()
     return bb
 end
@@ -184,6 +250,8 @@ function ScaledCoverCache:clear()
         self._hits, self._puts, self._evictions))
     self._cache     = {}
     self._order     = {}
+    self._sizes     = {}
+    self._bytes     = 0
     self._hits      = 0
     self._puts      = 0
     self._evictions = 0
