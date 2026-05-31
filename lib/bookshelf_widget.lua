@@ -3329,7 +3329,11 @@ function BookshelfWidget:_openPageJump()
     local dialog
     dialog = InputDialog:new{
         title       = _("Enter text, letter or page number"),
-        input       = tostring(bw.page),
+        -- Start empty: pre-filling the current page number just forced the
+        -- user to clear it before typing anything else. Show the current
+        -- page as a placeholder hint instead so the context is still there.
+        input       = "",
+        input_hint  = tostring(bw.page),
         description = string.format(_("(a - z) or (1 - %d)"), total),
         buttons = {
             {
