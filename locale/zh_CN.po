@@ -9,7 +9,7 @@ msgstr ""
 "Project-Id-Version: \n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-05-31 19:26+0100\n"
-"PO-Revision-Date: 2026-06-06 00:24+0800\n"
+"PO-Revision-Date: 2026-06-06 01:40+0800\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "Language: zh_CN\n"
@@ -51,15 +51,15 @@ msgstr "关闭 Bookshelf"
 
 #: main.lua:440
 msgid "Open Bookshelf"
-msgstr "启用 Bookshelf"
+msgstr "开启 Bookshelf"
 
 #: main.lua:484
 msgid "Edit book detail view"
-msgstr "编辑图书详情页"
+msgstr "编辑图书详情"
 
 #: main.lua:493
 msgid "Bookshelf chips…"
-msgstr "Bookshelf分类…"
+msgstr "书架分类…"
 
 #: main.lua:501
 msgid "Manage collections…"
@@ -107,7 +107,7 @@ msgstr "Bookshelf: 上一个分类"
 
 #: main.lua:726
 msgid "Bookshelf: expand or collapse hero"
-msgstr "Bookshelf: 展开/折叠 头图"
+msgstr "Bookshelf: 展开/折叠 书籍详情"
 
 #: main.lua:732
 msgid "Bookshelf: toggle selection mode"
@@ -170,15 +170,15 @@ msgid ""
 "Install the CoverBrowser plugin to enable it."
 msgstr ""
 "图书元数据扫描器不可用。\n"
-"安装CoverBrowser插件以启用它。"
+"安装 CoverBrowser 插件以启用它。"
 
 #: main.lua:1275
 msgid ""
 "This will clear the development branch setting and install the latest stable "
 "release of Bookshelf, then restart KOReader. Continue?"
 msgstr ""
-"这样可以清除开发分支设置，安装最新的Bookshelf稳定版本，之后会重启KOReader。是"
-"否继续？"
+"这样可以清除开发分支设置，安装最新的 Bookshelf 稳定发布版本，之后会重启 "
+"KOReader。是否继续？"
 
 #: main.lua:1276 lib/bookshelf_bulk_actions.lua:284
 #: lib/bookshelf_settings.lua:1450 lib/bookshelf_settings.lua:1493
@@ -187,7 +187,7 @@ msgstr "重置"
 
 #: main.lua:1297
 msgid "Bookshelf update available: v"
-msgstr "Bookshelf 可更新: v"
+msgstr "「Bookshelf」可更新: v"
 
 #: lib/bookshelf_bulk_actions.lua:25
 #, lua-format
@@ -233,7 +233,7 @@ msgstr "设定评分"
 #: lib/bookshelf_bulk_actions.lua:183 lib/bookshelf_bulk_actions.lua:185
 #: lib/bookshelf_bulk_actions.lua:187 lib/bookshelf_widget.lua:7349
 msgid "Favourite"
-msgstr "收藏夹"
+msgstr "收藏"
 
 #: lib/bookshelf_bulk_actions.lua:213 lib/bookshelf_chip_editor.lua:197
 #: lib/bookshelf_chip_editor.lua:1203 lib/bookshelf_widget.lua:7383
@@ -337,7 +337,7 @@ msgstr "首页 (平铺)"
 
 #: lib/bookshelf_chip_editor.lua:192 lib/bookshelf_chip_editor.lua:1172
 msgid "Recently read"
-msgstr "最近阅读"
+msgstr "在读"
 
 #: lib/bookshelf_chip_editor.lua:193 lib/bookshelf_chip_editor.lua:1173
 msgid "Latest added"
@@ -775,7 +775,7 @@ msgstr "图标…"
 
 #: lib/bookshelf_library_modal.lua:856
 msgid "Page %1 of %2"
-msgstr "%1 / %2 页"
+msgstr "第 %1 / %2 页"
 
 #: lib/bookshelf_picker_cell.lua:90
 msgid "book"
@@ -827,7 +827,7 @@ msgid ""
 "  [if:series]Book %series_num of %series_name[/if]\n"
 "  [if:batt<20]LOW %batt[/if]"
 msgstr ""
-"占位符用于在渲染图书详情页、状态栏时自动替换为实时数据。\n"
+"占位符用于在渲染图书详情、状态栏时自动替换为实时数据。\n"
 "\n"
 "  %title — %book_pct\n"
 "  → 沙丘 — 36%\n"
@@ -1062,8 +1062,8 @@ msgid ""
 "hero size with the bookshelf visible behind it. Changes preview in realtime; "
 "Accept keeps them, Cancel reverts."
 msgstr ""
-"弹出小型悬浮面板，可在书架页面可见状态下循环切换封面尺寸与头图尺寸。修改实时"
-"预览，点击确认保存设置、点击撤销恢复原有参数。"
+"弹出小型悬浮面板，可在书架页面可见状态下循环切换封面尺寸与书籍详情尺寸。修改"
+"实时预览，点击确认保存设置、点击撤销恢复原有参数。"
 
 #: lib/bookshelf_settings.lua:1106
 msgid "Cover display"
@@ -1131,7 +1131,7 @@ msgstr ""
 
 #: lib/bookshelf_settings.lua:1319
 msgid "\"Latest\" walk depth"
-msgstr "「最新」目录遍历深度"
+msgstr "新书遍历深度"
 
 #: lib/bookshelf_settings.lua:1324
 msgid "Cover cache"
@@ -1197,10 +1197,10 @@ msgid ""
 "-- tap stages the book as the hero preview, tap the hero opens it -- and are "
 "unaffected by this setting."
 msgstr ""
-"开启后，在头图卡片或展开模式的书架封面处打开书籍需要双击操作：首次点击选中封"
-"面 (出现选中高亮框)，再次点击才启动书本。适合浏览时容易误点开图书的用户。常规"
-"书架封面 (显示头部大图) 本身已是该交互逻辑：单击将图书设为头图预览，点击头图"
-"打开书籍，不受本选项控制。"
+"开启后，在书籍详情卡片或展开模式的书架封面处打开书籍需要双击操作：首次点击选"
+"中封面 (出现选中高亮框)，再次点击才启动书本。适合浏览时容易误点开图书的用户。"
+"常规书架封面 (显示头部大图) 本身已是该交互逻辑：单击将图书设为书籍详情预览，"
+"点击书籍详情打开书籍，不受本选项控制。"
 
 #: lib/bookshelf_settings.lua:1401
 msgid "Closing book notification"
@@ -1224,7 +1224,7 @@ msgstr "跟随 KOReader 设置"
 
 #: lib/bookshelf_settings.lua:1424
 msgid "Bookshelf UI font: %1"
-msgstr "Bookshelf 界面字体: %1"
+msgstr "书架界面字体: %1"
 
 #: lib/bookshelf_settings.lua:1426
 msgid ""
@@ -1233,9 +1233,9 @@ msgid ""
 "KOReader UI font. The hero title and author have their own fonts in the hero "
 "card editor."
 msgstr ""
-"书架界面文字 (分类、标签、元数据)所用字体，可任选已安装字体 (选择器与头图卡片"
-"相同)；'(默认)' 选项同步 KOReader 全局界面字体。头图的书名、作者字体需在头图"
-"卡片编辑面板单独设置。"
+"书架界面文字 (分类、标签、元数据) 所用字体，可任选已安装字体 (选择器与书籍详"
+"情卡片相同)；'(默认)' 选项同步 KOReader 全局界面字体。书籍详情的书名、作者字"
+"体需在书籍详情卡片编辑面板单独设置。"
 
 #: lib/bookshelf_settings.lua:1434
 msgid "Reset chip bar to defaults"
@@ -1251,8 +1251,8 @@ msgid ""
 "unaffected."
 msgstr ""
 "清空自定义标签布局 (包含标签显示项、排序顺序、名称图标、来源、筛选及排序规"
-"则)，恢复软件初始默认标签配置: 首页、最新入库、丛书、收藏设为启用状态，其余标"
-"签可手动开启。同时将当前选中标签切回首页、页码重置为 1。头图文字、字体、配色"
+"则)，恢复软件初始默认标签配置: 首页、新书、丛书、收藏设为启用状态，其余标签可"
+"手动开启。同时将当前选中标签切回首页、页码重置为 1。书籍详情文字、字体、配色"
 "等其他设置保持不变。"
 
 #: lib/bookshelf_settings.lua:1446
@@ -1264,8 +1264,8 @@ msgid ""
 msgstr ""
 "是否将分类栏恢复默认设置？\n"
 "\n"
-"所有自行新增、修改的自定义分类将会被清除；书架其余配置 (头图文字、字体、配色)"
-"保持不变。"
+"所有自行新增、修改的自定义分类将会被清除；书架其余配置 (书籍详情文字、字体、"
+"配色)保持不变。"
 
 #: lib/bookshelf_settings.lua:1482
 msgid "Reset book detail area to defaults"
@@ -1277,7 +1277,7 @@ msgid ""
 "detail layout, including the bundled title (Inter ExtraBold) and author "
 "(Caveat) fonts. The Bookshelf UI font and chip bar are unaffected."
 msgstr ""
-"清除头图与书籍详情页的自定义样式，恢复出厂默认排版，标题字体 (Inter "
+"清除书籍详情与书籍详情页的自定义样式，恢复出厂默认排版，标题字体 (Inter "
 "ExtraBold)、作者字体 (Caveat)一并还原为预设样式。书架界面字体、顶部贴片栏配置"
 "不受改动。"
 
@@ -1290,8 +1290,7 @@ msgid ""
 msgstr ""
 "是否重置书籍详情区域为默认配置？\n"
 "\n"
-"所有头图与详情页的文字、字体自定义设置将会清空；书架界面字体、顶部贴片栏保持"
-"不变。"
+"所有书籍详情的文字、字体自定义设置将会清空；书架界面字体、分类栏保持不变。"
 
 #: lib/bookshelf_settings.lua:1508
 msgid "BETA: Read calibre metadata.calibre"
@@ -1346,11 +1345,11 @@ msgstr "分类栏字体比例"
 
 #: lib/bookshelf_settings.lua:1910
 msgid "Stack & folder label scale"
-msgstr "堆叠 &文件夹 标签比例"
+msgstr "堆叠&文件夹标签比例"
 
 #: lib/bookshelf_settings.lua:1978
 msgid "Hero card"
-msgstr "头图卡片"
+msgstr "书籍详情卡片"
 
 #: lib/bookshelf_settings.lua:1979
 msgid "Chip bar"
@@ -1430,11 +1429,11 @@ msgstr "安装分支版本"
 
 #: lib/bookshelf_settings.lua:2305
 msgid "Reset to latest stable release"
-msgstr "重置到最新稳定版本"
+msgstr "重置到最新的稳定版本"
 
 #: lib/bookshelf_settings.lua:2316 lib/bookshelf_settings.lua:2319
 msgid "Installed: v"
-msgstr "安装: v"
+msgstr "已安装: v"
 
 #: lib/bookshelf_settings.lua:2359
 msgid "Flexible chip widths"
@@ -1476,15 +1475,15 @@ msgstr "系列编号"
 
 #: lib/bookshelf_sort_engine.lua:215
 msgid "Series #"
-msgstr "系列#"
+msgstr "系列 #"
 
 #: lib/bookshelf_sort_engine.lua:223
 msgid "Series + index"
-msgstr "系列+编号"
+msgstr "系列 + 编号"
 
 #: lib/bookshelf_sort_engine.lua:223
 msgid "Series + #"
-msgstr "系列 +#"
+msgstr "系列 + #"
 
 #: lib/bookshelf_sort_engine.lua:234
 msgid "Last opened"
@@ -1540,11 +1539,11 @@ msgstr "首页"
 
 #: lib/bookshelf_tab_model.lua:46
 msgid "Recent"
-msgstr "最近阅读"
+msgstr "在读"
 
 #: lib/bookshelf_tab_model.lua:48
 msgid "Latest"
-msgstr "最新入库"
+msgstr "新书"
 
 #: lib/bookshelf_tab_model.lua:56 lib/bookshelf_widget.lua:1066
 msgid "Tags"
@@ -1568,7 +1567,7 @@ msgstr "无法查看更新。"
 
 #: lib/bookshelf_updater.lua:238
 msgid "Bookshelf is up to date."
-msgstr "Bookshelf 已是最新版本。"
+msgstr "「Bookshelf」已是最新版本。"
 
 #: lib/bookshelf_updater.lua:239
 msgid "Version: "
@@ -1608,11 +1607,11 @@ msgstr "安装失败: "
 
 #: lib/bookshelf_updater.lua:398
 msgid "Bookshelf updated to v"
-msgstr "Bookshelf更新到 v"
+msgstr "「Bookshelf」更新到 v"
 
 #: lib/bookshelf_updater.lua:399
 msgid "Restart KOReader now?"
-msgstr "现在重启KOReader？"
+msgstr "现在重启「KOReader」？"
 
 #: lib/bookshelf_updater.lua:400
 msgid "Restart"
@@ -1705,7 +1704,7 @@ msgstr "当前主页文件夹:"
 
 #: lib/bookshelf_widget.lua:2476 lib/bookshelf_widget.lua:7298
 msgid "File no longer exists. The bookshelf entry is stale."
-msgstr "文件已不存在，Bookshelf 条目失效。"
+msgstr "文件已不存在，书架条目失效。"
 
 #: lib/bookshelf_widget.lua:3149 lib/bookshelf_widget.lua:4845
 msgid "Selection cleared"
@@ -1744,7 +1743,7 @@ msgstr "正在刷新书库…"
 
 #: lib/bookshelf_widget.lua:6277
 msgid "✓ Bookshelf is my home screen"
-msgstr "✓ Bookshelf 设为主屏幕"
+msgstr "✓ 「Bookshelf」设为主屏幕"
 
 #: lib/bookshelf_widget.lua:6278
 msgid "Set as home screen"
@@ -1752,7 +1751,7 @@ msgstr "设置为主屏幕"
 
 #: lib/bookshelf_widget.lua:6285 lib/bookshelf_widget.lua:6289
 msgid "Bookshelf will load on next launch"
-msgstr "Bookshelf 将在下次启动时加载"
+msgstr "「Bookshelf」将在下次启动时加载"
 
 #: lib/bookshelf_widget.lua:6422
 msgid "(no title)"
