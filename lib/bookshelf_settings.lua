@@ -448,6 +448,8 @@ function Settings:_coverDisplaySubItems()
     return {
         toggleRow("progress_bookmark_enabled",
                   _("Show reading bookmarks"), false),
+        toggleRow("on_hold_badge_enabled",
+                  _("Show on-hold badge"), false),
         -- Completed book badge: three-state. "bookmark" (default;
         -- pre-v2.1 dangling outlined check), "tickbox" (v2.1 square
         -- pill), "none". Legacy boolean progress_badge_enabled still
@@ -657,10 +659,48 @@ function Settings:_coverDisplaySubItems()
         toggleRow("progress_page_count_enabled",
                   _("Show page count"), true, true),
         -- Cover-badge font scale moved to Settings -> Text size (#60).
-        -- Favourites star pill at top-left of covers for books in the
-        -- favourites collection. Defaults off; opt-in visual marker.
+        -- Favourites icon at top-left of covers for books in the favourites
+        -- collection. Defaults off; opt-in visual marker.
         toggleRow("show_fav_badge",
-                  _("Show favourites star"), false, true),
+                  _("Show favourites icon"), false, true),
+        -- Favourite icon glyph: heart (default; reads distinctly from the
+        -- rating stars) or star. The chosen icon also selects which colour
+        -- the Colors -> Favourite entry edits.
+        (function()
+            local function readIcon()
+                return require("lib/bookshelf_cover_progress").favoriteIcon()
+            end
+            local function setIcon(icon, touchmenu_instance)
+                BookshelfSettings.save("fav_icon", icon)
+                markDirty()
+                if touchmenu_instance and touchmenu_instance.updateItems then
+                    touchmenu_instance:updateItems()
+                end
+            end
+            local labels = { heart = _("Heart"), star = _("Star") }
+            local function optionRow(icon, label)
+                return {
+                    text           = label,
+                    checked_func   = function() return readIcon() == icon end,
+                    radio          = true,
+                    keep_menu_open = true,
+                    callback       = function(touchmenu_instance)
+                        setIcon(icon, touchmenu_instance)
+                    end,
+                }
+            end
+            return {
+                text_func = function()
+                    return _("Favourite icon") .. ": " .. labels[readIcon()]
+                end,
+                sub_item_table_func = function()
+                    return {
+                        optionRow("heart", labels.heart),
+                        optionRow("star",  labels.star),
+                    }
+                end,
+            }
+        end)(),
     }
 end
 
@@ -885,17 +925,28 @@ function Settings:_colorsSubItems()
             end,
         },
         {
+            -- Edits the colour for whichever favourite icon is active, so
+            -- switching Heart/Star in Cover display points this entry (label,
+            -- value, picker, reset) at that icon's own colour key.
             text_func = function()
-                return _("Favourite star color") .. ": "
-                    .. valueLabel("favorite_star")
+                local is_heart = require("lib/bookshelf_cover_progress").favoriteIcon() == "heart"
+                local label   = is_heart and _("Favourite heart color") or _("Favourite star color")
+                return label .. ": " .. valueLabel(is_heart and "favorite_heart" or "favorite_star")
             end,
             keep_menu_open = true,
             callback = function(touchmenu_instance)
-                pickColor("favorite_star_color", "favorite_star", 15,
-                    _("Favourite star color (% black)"), touchmenu_instance)
+                local is_heart = require("lib/bookshelf_cover_progress").favoriteIcon() == "heart"
+                if is_heart then
+                    pickColor("favorite_heart_color", "favorite_heart", 15,
+                        _("Favourite heart color (% black)"), touchmenu_instance)
+                else
+                    pickColor("favorite_star_color", "favorite_star", 15,
+                        _("Favourite star color (% black)"), touchmenu_instance)
+                end
             end,
             hold_callback = function(touchmenu_instance)
-                deleteModeKey("favorite_star_color")
+                local is_heart = require("lib/bookshelf_cover_progress").favoriteIcon() == "heart"
+                deleteModeKey(is_heart and "favorite_heart_color" or "favorite_star_color")
                 markDirty()
                 if touchmenu_instance then touchmenu_instance:updateItems() end
             end,
@@ -990,7 +1041,7 @@ function Settings:_colorsSubItems()
                 local keys = {
                     "progress_fill", "progress_track",
                     "bookmark_color", "complete_bookmark_color",
-                    "favorite_star_color",
+                    "favorite_star_color", "favorite_heart_color",
                     "badge_fg", "badge_bg", "border_color",
                     "folder_overlay_bg", "folder_overlay_fg",
                 }
@@ -1127,9 +1178,199 @@ function Settings:_settingsSubItems()
             end,
         },
         {
+            text                = _("Hardcover enrichment"),
+            sub_item_table_func = function()
+                return self:_hardcoverSubItems()
+            end,
+        },
+        {
             text                = _("Advanced settings"),
             sub_item_table_func = function()
                 return self:_advancedSubItems()
+            end,
+        },
+    }
+end
+
+local function _formatCacheTime(ts)
+    ts = tonumber(ts)
+    if not ts then return _("never") end
+    return os.date("%Y-%m-%d %H:%M", ts)
+end
+
+function Settings:_hardcoverSubItems()
+    local function markDirty(reason)
+        pcall(function()
+            require("lib/bookshelf_book_repository").invalidateBookCache(reason or "hardcover")
+        end)
+        pcall(function()
+            require("lib/bookshelf_image_source").invalidateCache()
+        end)
+        if self._bw and self._bw._rebuild then
+            self._bw:_rebuild()
+            UIManager:setDirty(self._bw, "ui")
+        end
+    end
+
+    local function notify(text, timeout)
+        UIManager:show(Notification:new{
+            text    = text,
+            timeout = timeout or 3,
+        })
+    end
+
+    return {
+        {
+            text_func = function()
+                local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                if not ok_hc or not Hardcover or not Hardcover.getCacheStats then
+                    return _("Cached Hardcover ratings: unavailable")
+                end
+                local stats = Hardcover.getCacheStats()
+                return string.format(_("Cached Hardcover ratings: %d/%d · %s"),
+                    stats.rated or 0,
+                    stats.linked or 0,
+                    _formatCacheTime(stats.fetched_at))
+            end,
+            enabled_func = function() return false end,
+        },
+        {
+            text = _("Fill missing descriptions from Hardcover"),
+            help_text = _("When a book is linked to Hardcover and Bookshelf has cached a description for it, use that text only if the EPUB has no description of its own."),
+            checked_func = function()
+                return BookshelfSettings.nilOrTrue("hardcover_fill_descriptions")
+            end,
+            keep_menu_open = true,
+            callback = function()
+                local enabled = BookshelfSettings.nilOrTrue("hardcover_fill_descriptions")
+                BookshelfSettings.save("hardcover_fill_descriptions", not enabled)
+                markDirty("hardcover-description-toggle")
+            end,
+        },
+        {
+            text = _("Use Hardcover covers when missing"),
+            help_text = _("When a linked book has no embedded EPUB cover, use the cached Hardcover cover image as a Bookshelf-only fallback. EPUB files are not modified."),
+            checked_func = function()
+                return BookshelfSettings.nilOrTrue("hardcover_fill_covers")
+            end,
+            keep_menu_open = true,
+            callback = function()
+                local enabled = BookshelfSettings.nilOrTrue("hardcover_fill_covers")
+                BookshelfSettings.save("hardcover_fill_covers", not enabled)
+                markDirty("hardcover-cover-toggle")
+            end,
+        },
+        {
+            text = _("Show Hardcover ratings in hero"),
+            help_text = _("When enabled, the Hero rating row shows the cached public Hardcover rating instead of KOReader's local rating. Enabling this also turns on the Hero rating row. Normal Bookshelf rendering only reads the local cache."),
+            checked_func = function()
+                return BookshelfSettings.isTrue("hardcover_hero_rating")
+            end,
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                local enabled = BookshelfSettings.isTrue("hardcover_hero_rating")
+                BookshelfSettings.save("hardcover_hero_rating", not enabled)
+                if not enabled then
+                    local Regions = require("lib/bookshelf_hero_regions")
+                    local regions = Regions.read()
+                    if regions.rating and regions.rating.disabled then
+                        regions.rating.disabled = false
+                        Regions.write("rating", regions.rating)
+                    end
+                end
+                if touchmenu_instance and touchmenu_instance.updateItems then
+                    touchmenu_instance:updateItems()
+                end
+                markDirty("hardcover-rating-toggle")
+            end,
+        },
+        {
+            text = _("Refresh Hardcover ratings"),
+            help_text = _("Fetch public ratings and review counts for linked Hardcover books and store them in Bookshelf's local cache."),
+            callback = function(touchmenu_instance)
+                if touchmenu_instance then
+                    UIManager:close(touchmenu_instance)
+                end
+                UIManager:nextTick(function()
+                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                    if not ok_hc or not Hardcover or not Hardcover.refreshRatingsOnline then
+                        notify(_("Hardcover integration could not be loaded"))
+                        return
+                    end
+                    notify(_("Fetching Hardcover ratings..."), 1)
+                    Hardcover.refreshRatingsOnline(function(ok, stats)
+                        if not ok then
+                            notify(tostring(stats or _("Hardcover ratings refresh failed")), 5)
+                            return
+                        end
+                        markDirty("hardcover-ratings-refresh")
+                        stats = type(stats) == "table" and stats or {}
+                        notify(T(_("Hardcover ratings refreshed: %1 rated of %2 linked books"),
+                                 tostring(stats.rated or 0),
+                                 tostring(stats.linked or 0)), 4)
+                    end)
+                end)
+            end,
+        },
+        {
+            text = _("Refresh linked Hardcover metadata"),
+            help_text = _("Fetch descriptions and cover images for books already linked to Hardcover. Rendering never contacts Hardcover; this explicit refresh updates Bookshelf's local cache."),
+            callback = function(touchmenu_instance)
+                if touchmenu_instance then
+                    UIManager:close(touchmenu_instance)
+                end
+                UIManager:nextTick(function()
+                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                    if not ok_hc or not Hardcover then
+                        notify(_("Hardcover integration could not be loaded"))
+                        return
+                    end
+                    Hardcover.refreshAllLinkedOnline(function(ok, stats)
+                        if not ok then
+                            notify(tostring(stats or _("Hardcover refresh failed")), 5)
+                            return
+                        end
+                        markDirty("hardcover-refresh")
+                        notify(T(_("Hardcover metadata refreshed: %1 updated, %2 failed"),
+                                 tostring(stats.updated or 0),
+                                 tostring(stats.failed or 0)), 4)
+                    end)
+                end)
+            end,
+        },
+        {
+            text = _("Clear Hardcover cache"),
+            help_text = _("Remove Bookshelf's cached Hardcover descriptions and downloaded cover images. Existing book links are kept."),
+            callback = function(touchmenu_instance)
+                if touchmenu_instance then
+                    UIManager:close(touchmenu_instance)
+                end
+                UIManager:nextTick(function()
+                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                    if ok_hc and Hardcover and Hardcover.clearEnrichmentCache then
+                        Hardcover.clearEnrichmentCache()
+                    end
+                    markDirty("hardcover-clear-cache")
+                    notify(_("Hardcover cache cleared"))
+                end)
+            end,
+        },
+        {
+            text = _("Clear cached Hardcover ratings/reviews"),
+            help_text = _("Remove Bookshelf's cached Hardcover ratings, review counts, and review text. Existing links and cached descriptions/covers are kept."),
+            callback = function(touchmenu_instance)
+                if touchmenu_instance then
+                    UIManager:close(touchmenu_instance)
+                end
+                UIManager:nextTick(function()
+                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                    if ok_hc and Hardcover then
+                        if Hardcover.clearRatingsCache then Hardcover.clearRatingsCache() end
+                        if Hardcover.clearReviewsCache then Hardcover.clearReviewsCache() end
+                    end
+                    markDirty("hardcover-ratings-clear-cache")
+                    notify(_("Hardcover ratings/reviews cache cleared"))
+                end)
             end,
         },
     }

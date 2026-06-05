@@ -39,6 +39,14 @@ local function splitAuthors(s)
     return #t > 0 and t or nil
 end
 
+local function shallowCopyRecord(record)
+    local copy = {}
+    for k, v in pairs(record or {}) do
+        copy[k] = v
+    end
+    return copy
+end
+
 -- Split a genre/tag string (or array of strings) on common EPUB delimiters
 -- (comma, semicolon, pipe, slash) and return a trimmed array, or nil.
 local function splitGenreTags(src)
@@ -89,6 +97,16 @@ local function getBookInfoMgr()
     local ok, mod = pcall(require, "bookinfomanager")
     _bim_cache = (ok and mod) or false
     return _bim_cache or nil
+end
+
+local _hardcover_cache
+local function getHardcover()
+    if _hardcover_cache ~= nil then
+        return _hardcover_cache or nil
+    end
+    local ok, mod = pcall(require, "lib/bookshelf_hardcover")
+    _hardcover_cache = (ok and mod) or false
+    return _hardcover_cache or nil
 end
 
 -- Public: true if BookInfoManager is available (CoverBrowser enabled).
@@ -378,7 +396,12 @@ function Repo.buildBookMeta(filepath, opts)
     -- good record we built for this file when BIM doesn't currently
     -- have usable metadata for it.
     if not info.has_meta and _meta_record_cache[filepath] then
-        return _meta_record_cache[filepath]
+        local cached = shallowCopyRecord(_meta_record_cache[filepath])
+        local Hardcover = getHardcover()
+        if Hardcover and Hardcover.enrichBook then
+            pcall(Hardcover.enrichBook, cached)
+        end
+        return cached
     end
     -- Calibre is the PRIMARY source for textual metadata when a
     -- metadata.calibre file is available — it already has clean,
@@ -494,6 +517,10 @@ function Repo.buildBookMeta(filepath, opts)
             if k ~= "cover_bb" then cached[k] = v end
         end
         _meta_record_cache[filepath] = cached
+    end
+    local Hardcover = getHardcover()
+    if Hardcover and Hardcover.enrichBook then
+        pcall(Hardcover.enrichBook, book)
     end
     return book
 end
