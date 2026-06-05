@@ -109,6 +109,30 @@ local function _saveRatingsCache(cache)
     BookshelfSettings.save(RATINGS_TIME_KEY, os.time())
 end
 
+-- Merge a single book's aggregate rating into the ratings cache. Called after
+-- a per-book enrichment fetch so a freshly linked book shows its rating in the
+-- hero without waiting for a full "Refresh Hardcover ratings" sweep. Unlike
+-- _saveRatingsCache this does NOT bump RATINGS_TIME_KEY -- that timestamp means
+-- "last full sweep", and a single-book back-fill is not one. Preserves any
+-- existing user_rating / user_book_id fields from a prior full refresh.
+local function _backfillRatingEntry(book_id, payload)
+    if not book_id or type(payload) ~= "table" then return end
+    if payload.rating == nil and payload.ratings_count == nil
+            and payload.reviews_count == nil then
+        return
+    end
+    local cache = _readRatingsCache()
+    local key = tostring(book_id)
+    local entry = type(cache[key]) == "table" and cache[key] or {}
+    entry.rating = tonumber(payload.rating) or entry.rating or false
+    entry.ratings_count = tonumber(payload.ratings_count) or entry.ratings_count or 0
+    entry.reviews_count = tonumber(payload.reviews_count) or entry.reviews_count or 0
+    entry.fetched_at = os.time()
+    cache[key] = entry
+    _ratings_cache = cache
+    BookshelfSettings.save(RATINGS_KEY, cache)
+end
+
 local function _readReviewsCache()
     if _reviews_cache then return _reviews_cache end
     local raw = BookshelfSettings.read(REVIEWS_KEY, {})
@@ -860,6 +884,9 @@ local function _fetchBookEnrichment(book_id, edition_id, opts)
                 title
                 description
                 cached_image
+                rating
+                ratings_count
+                reviews_count
               }
               edition: editions_by_pk(id: $editionId) {
                 id
@@ -884,6 +911,9 @@ local function _fetchBookEnrichment(book_id, edition_id, opts)
                 title
                 description
                 cached_image
+                rating
+                ratings_count
+                reviews_count
               }
             }
         ]]
@@ -909,6 +939,9 @@ local function _fetchBookEnrichment(book_id, edition_id, opts)
         description = data.book.description,
         cover_url = image_url,
         cover_path = cover_path,
+        rating = tonumber(data.book.rating),
+        ratings_count = tonumber(data.book.ratings_count),
+        reviews_count = tonumber(data.book.reviews_count),
         fetched_at = os.time(),
     }
 end
@@ -935,6 +968,7 @@ function Hardcover.refreshBook(book, opts)
     local cache = _readEnrichmentCache()
     cache[_cacheKey(link.book_id, link.edition_id)] = payload
     _saveEnrichmentCache(cache)
+    _backfillRatingEntry(link.book_id, payload)
     if opts.on_refreshed then opts.on_refreshed(payload) end
     return true, payload
 end
@@ -1118,8 +1152,8 @@ function Hardcover.refreshRatings()
     if not user_id then return false, user_err end
 
     local query = [[
-        query ($ids: [Int!], $userId: Int!) {
-          books(where: { id: { _in: $ids }}) {
+        query ($ids: [Int!], $userId: Int!, $limit: Int!) {
+          books(where: { id: { _in: $ids }}, limit: $limit) {
             id
             rating
             ratings_count
@@ -1132,44 +1166,64 @@ function Hardcover.refreshRatings()
         }
     ]]
 
-    local ok_query, data, err = pcall(Api.query, Api, query, { ids = ids, userId = user_id })
-    if not ok_query then
-        return false, "Hardcover rating refresh failed: " .. _errString(data)
-    end
-    if not data or type(data.books) ~= "table" then
-        return false, err and ("Hardcover rating refresh failed: " .. _errString(err))
-            or "No response from Hardcover"
-    end
-
+    -- Merge into the existing cache rather than rebuilding from scratch. The
+    -- old code pre-seeded EVERY linked id to rating=false and then overwrote
+    -- only the ids the API returned -- so a partial/failed fetch (Hasura row
+    -- cap, auth hiccup) silently clobbered real ratings to false. Now we keep
+    -- prior values for any linked id the response omits, and only entries for
+    -- books that are still linked. Querying in batches keeps each response
+    -- under any server-side row cap.
     local now = os.time()
+    local linked_set = {}
+    for _, id in ipairs(ids) do linked_set[tostring(id)] = true end
+
     local cache = {}
-    for _, id in ipairs(ids) do
-        cache[tostring(id)] = { rating = false, fetched_at = now }
+    for key, entry in pairs(_readRatingsCache()) do
+        if linked_set[key] then cache[key] = entry end
     end
 
-    local rated = 0
-    for _, row in ipairs(data.books) do
-        if type(row) == "table" and row.id then
-            local rating = tonumber(row.rating)
-            local user_book = type(row.user_books) == "table" and row.user_books[1] or nil
-            local user_rating = user_book and tonumber(user_book.rating) or nil
-            if rating then rated = rated + 1 end
-            cache[tostring(row.id)] = {
-                rating = rating or false,
-                ratings_count = tonumber(row.ratings_count) or 0,
-                reviews_count = tonumber(row.reviews_count) or 0,
-                user_book_id = user_book and user_book.id or nil,
-                user_rating = user_rating or false,
-                fetched_at = now,
-            }
+    local BATCH = 100
+    local rated, updated = 0, 0
+    local i = 1
+    while i <= #ids do
+        local batch = {}
+        for j = i, math.min(i + BATCH - 1, #ids) do
+            batch[#batch + 1] = ids[j]
         end
+        local ok_query, data, err = pcall(Api.query, Api, query,
+            { ids = batch, userId = user_id, limit = #batch })
+        if not ok_query then
+            return false, "Hardcover rating refresh failed: " .. _errString(data)
+        end
+        if not data or type(data.books) ~= "table" then
+            return false, err and ("Hardcover rating refresh failed: " .. _errString(err))
+                or "No response from Hardcover"
+        end
+        for _, row in ipairs(data.books) do
+            if type(row) == "table" and row.id then
+                local rating = tonumber(row.rating)
+                local user_book = type(row.user_books) == "table" and row.user_books[1] or nil
+                local user_rating = user_book and tonumber(user_book.rating) or nil
+                if rating then rated = rated + 1 end
+                updated = updated + 1
+                cache[tostring(row.id)] = {
+                    rating = rating or false,
+                    ratings_count = tonumber(row.ratings_count) or 0,
+                    reviews_count = tonumber(row.reviews_count) or 0,
+                    user_book_id = user_book and user_book.id or nil,
+                    user_rating = user_rating or false,
+                    fetched_at = now,
+                }
+            end
+        end
+        i = i + BATCH
     end
 
     _saveRatingsCache(cache)
     return true, {
         linked = #ids,
         rated = rated,
-        updated = #data.books,
+        updated = updated,
     }
 end
 
@@ -1196,6 +1250,23 @@ function Hardcover.enrichBook(book)
     if type(rating_entry) == "table" then
         book.hardcover_ratings_count = tonumber(rating_entry.ratings_count) or 0
         book.hardcover_reviews_count = tonumber(rating_entry.reviews_count) or 0
+    end
+
+    -- Fallback: a book linked after the last full ratings sweep has no entry
+    -- in the ratings cache, so the hero rating row would stay hidden. Its
+    -- aggregate rating and counts may already sit in the reviews cache (the
+    -- reviews payload carries the same book rating/ratings_count/reviews_count,
+    -- populated when the user opened "Reviews..."). Surface that. Read-only:
+    -- this never triggers a network fetch.
+    if not book.hardcover_rating then
+        local review_entry = _readReviewsCache()[tostring(link.book_id)]
+        local review_rating = type(review_entry) == "table"
+            and tonumber(review_entry.rating) or nil
+        if review_rating then
+            book.hardcover_rating = review_rating
+            book.hardcover_ratings_count = tonumber(review_entry.ratings_count) or 0
+            book.hardcover_reviews_count = tonumber(review_entry.reviews_count) or 0
+        end
     end
 
     local enrichment = Hardcover.getCachedEnrichment(link.book_id, link.edition_id)

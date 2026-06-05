@@ -94,6 +94,9 @@ package.loaded["hardcover/lib/hardcover_api"] = {
                 id = variables.bookId,
                 title = "Fresh Hardcover Title",
                 description = "Fresh Hardcover description.",
+                rating = 4.25,
+                ratings_count = 12,
+                reviews_count = 2,
             },
         }
     end,
@@ -246,6 +249,90 @@ test("fetchReviews loads and caches non-spoiler Hardcover reviews", function()
     Api.query = old_query
     assert(ok_cached, tostring(cached))
     assert(cached.reviews[1].user_name == "Reader One", "cached review missing")
+end)
+
+test("enrichBook falls back to the reviews cache when no ratings entry exists", function()
+    reset()
+    -- Book is linked (book_id 123) but was linked AFTER the last ratings
+    -- sweep, so there is NO entry in the ratings cache. Its aggregate rating
+    -- and counts are present in the reviews cache (populated when the user
+    -- opened "Reviews..."). The hero must still resolve a numeric rating.
+    settings.bookshelf_hardcover_reviews = {
+        ["123"] = {
+            book_id = 123,
+            rating = 4.17,
+            ratings_count = 1561,
+            reviews_count = 138,
+            reviews = {},
+        },
+    }
+    Hardcover.invalidate()
+
+    local book = Hardcover.enrichBook{ filepath = "/books/a.epub" }
+    assert(book.hardcover_rating == 4.17,
+        "rating not pulled from reviews cache: " .. tostring(book.hardcover_rating))
+    assert(book.hardcover_ratings_count == 1561,
+        "ratings_count: " .. tostring(book.hardcover_ratings_count))
+    assert(book.hardcover_reviews_count == 138,
+        "reviews_count: " .. tostring(book.hardcover_reviews_count))
+end)
+
+test("enrichBook prefers the ratings cache over the reviews fallback", function()
+    reset()
+    settings.bookshelf_hardcover_ratings = {
+        ["123"] = { rating = 4.5, ratings_count = 12, reviews_count = 2 },
+    }
+    settings.bookshelf_hardcover_reviews = {
+        ["123"] = { book_id = 123, rating = 1.0, ratings_count = 9, reviews_count = 9 },
+    }
+    Hardcover.invalidate()
+    local book = Hardcover.enrichBook{ filepath = "/books/a.epub" }
+    assert(book.hardcover_rating == 4.5,
+        "ratings cache should win: " .. tostring(book.hardcover_rating))
+    assert(book.hardcover_reviews_count == 2,
+        "ratings cache counts should win: " .. tostring(book.hardcover_reviews_count))
+end)
+
+test("refreshBook back-fills the ratings cache for a newly linked book", function()
+    reset()
+    assert(Hardcover.linkBook("/books/a.epub", { id = 123, title = "A Book" }))
+    local ok, payload = Hardcover.refreshBook{ filepath = "/books/a.epub" }
+    assert(ok, tostring(payload))
+
+    local ratings = settings.bookshelf_hardcover_ratings
+    assert(ratings and ratings["123"], "refreshBook wrote no ratings entry")
+    assert(ratings["123"].rating == 4.25,
+        "back-filled rating: " .. tostring(ratings["123"].rating))
+    assert(ratings["123"].ratings_count == 12,
+        "back-filled ratings_count: " .. tostring(ratings["123"].ratings_count))
+    assert(ratings["123"].reviews_count == 2,
+        "back-filled reviews_count: " .. tostring(ratings["123"].reviews_count))
+
+    Hardcover.invalidate()
+    local book = Hardcover.enrichBook{ filepath = "/books/a.epub" }
+    assert(book.hardcover_rating == 4.25,
+        "enrichBook did not surface back-filled rating: " .. tostring(book.hardcover_rating))
+end)
+
+test("refreshRatings preserves a linked book the API response omits", function()
+    reset()
+    -- Third linked book whose id the mock response never returns (simulating
+    -- a Hasura row cap / partial fetch). Its prior good rating must survive
+    -- the refresh rather than being clobbered to false.
+    hc_settings.books["/books/c.epub"] = { book_id = 777, title = "Linked C" }
+    settings.bookshelf_hardcover_ratings = {
+        ["777"] = { rating = 4.2, ratings_count = 50, reviews_count = 9 },
+    }
+    Hardcover.invalidate()
+
+    local ok = Hardcover.refreshRatings()
+    assert(ok, "refreshRatings failed")
+    local ratings = settings.bookshelf_hardcover_ratings
+    assert(ratings["777"] and ratings["777"].rating == 4.2,
+        "omitted linked entry was clobbered: "
+        .. tostring(ratings["777"] and ratings["777"].rating))
+    assert(ratings["123"].rating == 4.5, "returned entry not updated")
+    assert(ratings["999"].rating == false, "unrated returned entry should be false")
 end)
 
 io.stdout:write(("PASS %d  FAIL %d\n"):format(pass, fail))
