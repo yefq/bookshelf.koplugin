@@ -448,6 +448,8 @@ function Settings:_coverDisplaySubItems()
     return {
         toggleRow("progress_bookmark_enabled",
                   _("Show reading bookmarks"), false),
+        toggleRow("on_hold_badge_enabled",
+                  _("Show on-hold badge"), false),
         -- Completed book badge: three-state. "bookmark" (default;
         -- pre-v2.1 dangling outlined check), "tickbox" (v2.1 square
         -- pill), "none". Legacy boolean progress_badge_enabled still
@@ -657,10 +659,48 @@ function Settings:_coverDisplaySubItems()
         toggleRow("progress_page_count_enabled",
                   _("Show page count"), true, true),
         -- Cover-badge font scale moved to Settings -> Text size (#60).
-        -- Favourites star pill at top-left of covers for books in the
-        -- favourites collection. Defaults off; opt-in visual marker.
+        -- Favourites icon at top-left of covers for books in the favourites
+        -- collection. Defaults off; opt-in visual marker.
         toggleRow("show_fav_badge",
-                  _("Show favourites star"), false, true),
+                  _("Show favourites icon"), false, true),
+        -- Favourite icon glyph: heart (default; reads distinctly from the
+        -- rating stars) or star. The chosen icon also selects which colour
+        -- the Colors -> Favourite entry edits.
+        (function()
+            local function readIcon()
+                return require("lib/bookshelf_cover_progress").favoriteIcon()
+            end
+            local function setIcon(icon, touchmenu_instance)
+                BookshelfSettings.save("fav_icon", icon)
+                markDirty()
+                if touchmenu_instance and touchmenu_instance.updateItems then
+                    touchmenu_instance:updateItems()
+                end
+            end
+            local labels = { heart = _("Heart"), star = _("Star") }
+            local function optionRow(icon, label)
+                return {
+                    text           = label,
+                    checked_func   = function() return readIcon() == icon end,
+                    radio          = true,
+                    keep_menu_open = true,
+                    callback       = function(touchmenu_instance)
+                        setIcon(icon, touchmenu_instance)
+                    end,
+                }
+            end
+            return {
+                text_func = function()
+                    return _("Favourite icon") .. ": " .. labels[readIcon()]
+                end,
+                sub_item_table_func = function()
+                    return {
+                        optionRow("heart", labels.heart),
+                        optionRow("star",  labels.star),
+                    }
+                end,
+            }
+        end)(),
     }
 end
 
@@ -885,17 +925,28 @@ function Settings:_colorsSubItems()
             end,
         },
         {
+            -- Edits the colour for whichever favourite icon is active, so
+            -- switching Heart/Star in Cover display points this entry (label,
+            -- value, picker, reset) at that icon's own colour key.
             text_func = function()
-                return _("Favourite star color") .. ": "
-                    .. valueLabel("favorite_star")
+                local is_heart = require("lib/bookshelf_cover_progress").favoriteIcon() == "heart"
+                local label   = is_heart and _("Favourite heart color") or _("Favourite star color")
+                return label .. ": " .. valueLabel(is_heart and "favorite_heart" or "favorite_star")
             end,
             keep_menu_open = true,
             callback = function(touchmenu_instance)
-                pickColor("favorite_star_color", "favorite_star", 15,
-                    _("Favourite star color (% black)"), touchmenu_instance)
+                local is_heart = require("lib/bookshelf_cover_progress").favoriteIcon() == "heart"
+                if is_heart then
+                    pickColor("favorite_heart_color", "favorite_heart", 15,
+                        _("Favourite heart color (% black)"), touchmenu_instance)
+                else
+                    pickColor("favorite_star_color", "favorite_star", 15,
+                        _("Favourite star color (% black)"), touchmenu_instance)
+                end
             end,
             hold_callback = function(touchmenu_instance)
-                deleteModeKey("favorite_star_color")
+                local is_heart = require("lib/bookshelf_cover_progress").favoriteIcon() == "heart"
+                deleteModeKey(is_heart and "favorite_heart_color" or "favorite_star_color")
                 markDirty()
                 if touchmenu_instance then touchmenu_instance:updateItems() end
             end,
@@ -990,7 +1041,7 @@ function Settings:_colorsSubItems()
                 local keys = {
                     "progress_fill", "progress_track",
                     "bookmark_color", "complete_bookmark_color",
-                    "favorite_star_color",
+                    "favorite_star_color", "favorite_heart_color",
                     "badge_fg", "badge_bg", "border_color",
                     "folder_overlay_bg", "folder_overlay_fg",
                 }

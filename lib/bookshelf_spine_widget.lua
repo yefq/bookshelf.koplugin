@@ -591,6 +591,28 @@ function SpineWidget:_renderShadowedCard(inner)
     -- 3. Inner card (image or fallback) at (0,0)
     children[#children + 1] = inner
 
+    -- 3b. On-hold badge (IN FRONT of inner): a centred filled pause-circle,
+    --     like a video player's pause button. Shown when decide() flags the
+    --     book on-hold; decide() also nulls the corner in-progress glyph in
+    --     that case, so the cover carries one clear "on hold" cue rather than
+    --     two competing marks. Sized ~40% of cover width, halo only (it sits
+    --     fully inside the cover, so no drop shadow), centred over the card.
+    if indicators.on_hold and not self.is_bulk_selected then
+        local glyph_h = math.floor(card_w * 0.40)
+        if glyph_h > 0 then
+            local colors = CoverProgress.resolvedColors()
+            local outlined = CoverProgress.buildOutlinedGlyphWidget(
+                CoverProgress.GLYPH_PAUSE_CIRCLE, glyph_h, 1,
+                colors.border,     -- halo (shared Border color)
+                colors.bookmark,   -- centre fill (reuses the in-progress color)
+                "symbols")
+            children[#children + 1] = CenterContainer:new{
+                dimen = Geom:new{ w = card_w, h = card_h },
+                outlined,
+            }
+        end
+    end
+
     -- 4a. Finished badge, bookmark style (IN FRONT of inner): SAME position
     --     as the in-progress glyph (bottom-left, lifted by GLYPH_TOP_LIFT),
     --     a hollow check-bookmark with a black halo for legibility against
@@ -899,6 +921,13 @@ function SpineWidget:_renderShadowedCard(inner)
             local glyph_w = self:_glyphWidth(glyph_h)
             if glyph_w <= card_w * 0.4 then
                 local colors  = CoverProgress.resolvedColors()
+                -- Heart (default) or star, each with its own tunable colour;
+                -- switching the icon also switches the colour that's read.
+                local fav_icon  = CoverProgress.favoriteIcon()
+                local fav_glyph = fav_icon == "star"
+                    and CoverProgress.FAV_GLYPH_STAR or CoverProgress.FAV_GLYPH_HEART
+                local fav_color = fav_icon == "star"
+                    and colors.favorite_star or colors.favorite_heart
                 local halo_w   = 1
                 -- Shadow extent must exceed halo_w to peek out from
                 -- behind the outline. ~6% of glyph height keeps it
@@ -911,19 +940,19 @@ function SpineWidget:_renderShadowedCard(inner)
                 -- ascent / descent / line-height padding are accounted for;
                 -- the OverlapGroup's synthetic dimen under-reports that).
                 local probe = CoverProgress.buildGlyphWidget(
-                    "\xEF\x80\x85",  -- nerdfont star.1 (U+F005)
+                    fav_glyph,
                     glyph_h,
                     Blitbuffer.COLOR_BLACK,
                     "symbols")
                 local widget_h = probe:getSize().h
                 probe:free()
                 local outlined = CoverProgress.buildHaloShadowedGlyphWidget(
-                    "\xEF\x80\x85",
+                    fav_glyph,
                     glyph_h,
                     halo_w,
                     shadow_d, shadow_d,  -- down-right
                     colors.border,          -- halo (shared "Border color")
-                    colors.favorite_star,   -- centre fill (user-tunable)
+                    fav_color,              -- centre fill (per-icon, user-tunable)
                     colors.shadow,          -- shadow (always dark on screen)
                     "symbols")
                 -- 35% of the glyph hangs above the cover; 65% sits on the
