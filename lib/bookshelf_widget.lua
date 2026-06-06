@@ -7578,10 +7578,7 @@ function BookshelfWidget:_openHardcoverMenu(book)
     -- dialog so the checkbox updates without leaving the menu.
     local CHK_ON, CHK_OFF = "\xE2\x98\x91 ", "\xE2\x98\x90 "  -- ☑ / ☐
     local function flagOn(field)
-        -- Pass `book` so an auto-filled (global "fill when missing") cover or
-        -- description reads as ON, not OFF -- otherwise the checkbox disagrees
-        -- with what's on screen and toggling it appears to do nothing.
-        local f = Hardcover.getEnrichmentFlags and Hardcover.getEnrichmentFlags(book.filepath, book)
+        local f = Hardcover.getEnrichmentFlags and Hardcover.getEnrichmentFlags(book.filepath)
         return (f and f[field]) or false
     end
     local use_cover_button = {

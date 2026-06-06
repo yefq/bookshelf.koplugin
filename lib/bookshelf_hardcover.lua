@@ -550,6 +550,39 @@ function Hardcover.clearLink(filepath)
     return true
 end
 
+-- Full reset: undo every Hardcover change so the library looks as it did before
+-- any linking. Unlinks every book (Bookshelf's own links + the mirrored
+-- Hardcover-app entries), restores any user cover we displaced into a book's
+-- .sdr, deletes downloaded covers, and empties all caches. Destructive and
+-- irreversible -- the menu guards it with a warning. Returns the count removed.
+function Hardcover.removeAllData()
+    local fps, seen = {}, {}
+    local function collect(fp, link)
+        if type(link) == "table" and link.book_id and not seen[fp] then
+            seen[fp] = true
+            fps[#fps + 1] = fp
+        end
+    end
+    for fp, link in pairs(_readLinks()) do collect(fp, link) end
+    for fp, link in pairs(_readExternalLinks(true)) do collect(fp, link) end
+
+    for _, fp in ipairs(fps) do
+        local link = Hardcover.getLink(fp)
+        -- Undo a sidecar cover we wrote (restores the user's cover.orig backup).
+        -- Books we never re-covered (use_cover ~= true) are left untouched.
+        if link and link.use_cover == true then
+            pcall(Hardcover.disableSidecarCover, fp)
+        end
+        pcall(Hardcover.clearLink, fp)
+    end
+
+    Hardcover.clearEnrichmentCache()  -- descriptions + downloaded cover files
+    Hardcover.clearRatingsCache()
+    Hardcover.clearReviewsCache()
+    Hardcover.invalidate()
+    return #fps
+end
+
 function Hardcover.linkLabel(filepath)
     local link = Hardcover.getLink(filepath)
     if not link or not link.book_id then return nil end
@@ -568,31 +601,16 @@ end
 --                             as KOReader's custom cover (cover.<ext>).
 -- The book menu toggles them; linking auto-enables per the quality rules.
 
--- Effective per-book toggle state. An explicit flag (true/false set by the
--- user) always wins; when the flag is unset (nil) we report what the global
--- "fill when missing" default would actually render, so the checkbox matches
--- the cover/description on screen instead of showing OFF for an auto-filled
--- Hardcover cover. `book` (the menu's record) supplies has_cover / description;
--- the conditions mirror enrichBook exactly so display == behaviour.
-function Hardcover.getEnrichmentFlags(filepath, book)
+-- Per-book toggle state for the link menu. A Hardcover cover/description is
+-- only ever shown when the book's explicit flag is true (set by the link-time
+-- auto-decision or a manual toggle), so the checkbox is just that flag -- no
+-- global default to fold in any more.
+function Hardcover.getEnrichmentFlags(filepath)
     local link = Hardcover.getLink(filepath)
     if not link then return nil end
-    local enrichment = Hardcover.getCachedEnrichment(link.book_id, link.edition_id)
-    local has_hc_cover = type(enrichment) == "table"
-        and type(enrichment.cover_path) == "string" and enrichment.cover_path ~= ""
-    local has_hc_desc = type(enrichment) == "table"
-        and type(enrichment.description) == "string" and enrichment.description ~= ""
-    local cover_on = link.use_cover == true
-        or (link.use_cover == nil and has_hc_cover
-            and BookshelfSettings.nilOrTrue("hardcover_fill_covers")
-            and book ~= nil and not book.has_cover)
-    local desc_on = link.use_description == true
-        or (link.use_description == nil and has_hc_desc
-            and BookshelfSettings.nilOrTrue("hardcover_fill_descriptions")
-            and book ~= nil and (not book.description or book.description == ""))
     return {
-        use_cover       = cover_on or false,
-        use_description = desc_on or false,
+        use_cover       = link.use_cover == true,
+        use_description = link.use_description == true,
     }
 end
 
@@ -700,51 +718,61 @@ local function _parseSizetag(tag)
     return tonumber(w), tonumber(h)
 end
 
--- One-time defaults for the per-book override toggles, chosen the first time a
--- freshly linked book is enriched. Runs only on UNDECIDED flags (nil), so it
--- never overrides an explicit user choice and never re-fires on a later
--- metadata refresh. Gated on the same global "fill when missing" switches as
--- the passive fill, so a user who turned those off isn't surprised by an
--- auto-enabled override. `enrichment` is the just-cached payload.
+-- The sensible defaults, applied whenever a linked book is enriched (single
+-- link via refreshBook, or bulk via the paced "Refresh linked data" scan, which
+-- also calls refreshBook per file). Runs only on UNDECIDED
+-- flags (nil), so it never overrides an explicit user choice and never
+-- re-fires once the user (or a previous run) has decided. This is the single
+-- source of "should this book use Hardcover's cover/description" -- there is no
+-- separate global switch and no live fill; the decision is baked into the
+-- per-book flag here. `enrichment` is the just-cached payload.
 function Hardcover.autoDecideFlags(book, enrichment)
     if type(book) ~= "table" or not book.filepath then return end
     if type(enrichment) ~= "table" then return end
     local link = Hardcover.getLink(book.filepath)
     if not link then return end
 
+    -- Both decisions are recorded EXPLICITLY (true to adopt Hardcover's, false
+    -- to keep the book's own) -- never left nil. A stable true/false is what
+    -- lets a later refresh tell "already decided" from "still needs deciding",
+    -- and stops the auto-decision re-running forever on keep-own books.
+
     -- Description: adopt Hardcover's when the book carries none of its own.
-    if link.use_description == nil
-            and BookshelfSettings.nilOrTrue("hardcover_fill_descriptions")
-            and type(enrichment.description) == "string" and enrichment.description ~= ""
-            and (not book.description or book.description == "") then
-        Hardcover.setUseDescription(book.filepath, true)
+    if link.use_description == nil then
+        local adopt = type(enrichment.description) == "string"
+            and enrichment.description ~= ""
+            and (not book.description or book.description == "")
+        Hardcover.setUseDescription(book.filepath, adopt)
     end
 
     -- Cover: adopt Hardcover's when the book has no embedded cover, or its
     -- embedded cover is lower resolution than Hardcover's (compare total
     -- pixels). Unknown dimensions on either side are treated conservatively --
-    -- we keep the embedded cover rather than swap on a guess.
-    if link.use_cover == nil
-            and BookshelfSettings.nilOrTrue("hardcover_fill_covers")
-            and type(enrichment.cover_path) == "string" and enrichment.cover_path ~= "" then
-        local prefer
-        if not book.has_cover then
-            prefer = true
-        else
-            local ew, eh = _parseSizetag(book.cover_sizetag)
-            local hw = tonumber(enrichment.cover_width)
-            local hh = tonumber(enrichment.cover_height)
-            if ew and eh and hw and hh then
-                prefer = (hw * hh) > (ew * eh)
+    -- keep the embedded cover rather than swap on a guess.
+    if link.use_cover == nil then
+        local adopt = false
+        if type(enrichment.cover_path) == "string" and enrichment.cover_path ~= "" then
+            if not book.has_cover then
+                adopt = true
             else
-                prefer = false
+                local ew, eh = _parseSizetag(book.cover_sizetag)
+                local hw = tonumber(enrichment.cover_width)
+                local hh = tonumber(enrichment.cover_height)
+                if ew and eh and hw and hh then
+                    adopt = (hw * hh) > (ew * eh)
+                end
             end
         end
-        if prefer then
+        if adopt then
             -- enableSidecarCover reads the (just-cached) enrichment and writes
             -- the Hardcover cover into the book's .sdr so KOReader's own UI
             -- picks it up too.
             Hardcover.setUseCover(book.filepath, true)
+        else
+            -- Record "keep own cover" without touching files. NOT setUseCover
+            -- (false): disableSidecarCover would delete a user's own custom
+            -- .sdr cover. We only want to persist the decision.
+            _updateLinkField(book.filepath, "use_cover", false)
         end
     end
 end
@@ -1261,45 +1289,6 @@ function Hardcover.refreshBookOnline(book, opts, callback)
     end)
 end
 
-function Hardcover.refreshAllLinked()
-    local linked, updated, failed = 0, 0, 0
-    local errors = {}
-    local seen = {}
-    local function process(_filepath, link)
-        if type(link) ~= "table" or not link.book_id then return end
-        local key = _cacheKey(link.book_id, link.edition_id)
-        if seen[key] then return end
-        seen[key] = true
-        linked = linked + 1
-        local ok, payload = _fetchBookEnrichment(link.book_id, link.edition_id, { force = true })
-        if ok then
-            local cache = _readEnrichmentCache()
-            cache[key] = payload
-            _saveEnrichmentCache(cache)
-            updated = updated + 1
-        else
-            failed = failed + 1
-            errors[#errors + 1] = tostring(payload)
-        end
-    end
-    for fp, link in pairs(_readExternalLinks(true)) do process(fp, link) end
-    for fp, link in pairs(_readLinks()) do process(fp, link) end
-    return true, {
-        linked = linked,
-        updated = updated,
-        failed = failed,
-        errors = errors,
-    }
-end
-
-function Hardcover.refreshAllLinkedOnline(callback)
-    return _runWhenOnline(function()
-        local ok, stats = Hardcover.refreshAllLinked()
-        if callback then callback(ok, stats) end
-    end, function(err)
-        if callback then callback(false, err) end
-    end)
-end
 
 local function _normaliseReviewsPayload(book)
     if type(book) ~= "table" then return nil end
@@ -1556,14 +1545,13 @@ function Hardcover.enrichBook(book)
     local enrichment = Hardcover.getCachedEnrichment(link.book_id, link.edition_id)
     if type(enrichment) ~= "table" then return book end
 
-    -- Per-book toggles (link.use_description / link.use_cover) OVERRIDE: when
-    -- on, force the Hardcover value even if the book has its own. When off, fall
-    -- back to the global "fill when missing" behaviour.
-    if type(enrichment.description) == "string" and enrichment.description ~= ""
-            and (link.use_description == true
-                 or (link.use_description ~= false
-                     and BookshelfSettings.nilOrTrue("hardcover_fill_descriptions")
-                     and (not book.description or book.description == ""))) then
+    -- A Hardcover cover/description is shown only when the per-book flag is
+    -- explicitly on. The flag is set by autoDecideFlags (the sensible default,
+    -- applied at link/refresh time) or by a manual toggle; there is no live
+    -- "fill when missing" path, so what renders here can't disagree with the
+    -- toggle the user sees.
+    if link.use_description == true
+            and type(enrichment.description) == "string" and enrichment.description ~= "" then
         book.description = enrichment.description
         book.hardcover_description = true
     end
@@ -1580,13 +1568,6 @@ function Hardcover.enrichBook(book)
             book.cover_image_path = enrichment.cover_path
             book.hardcover_cover = true
         end
-    elseif link.use_cover ~= false
-            and BookshelfSettings.nilOrTrue("hardcover_fill_covers")
-            and not book.has_cover
-            and type(enrichment.cover_path) == "string"
-            and enrichment.cover_path ~= "" then
-        book.cover_image_path = enrichment.cover_path
-        book.hardcover_cover = true
     end
     return book
 end

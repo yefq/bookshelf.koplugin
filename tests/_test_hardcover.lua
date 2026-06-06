@@ -53,6 +53,15 @@ package.loaded["luasettings"] = {
     end,
 }
 
+-- enrichBook's use_cover path and the sidecar helpers go through DocSettings.
+-- Minimal stub: no pre-existing custom cover, writes are no-ops.
+package.loaded["docsettings"] = {
+    findCustomCoverFile = function() return nil end,
+    getSidecarDir       = function() return "/tmp/bookshelf-hardcover-test" end,
+    flushCustomCover    = function() return true end,
+    getCustomCoverFile  = function() return nil end,
+}
+
 package.loaded["hardcover/lib/hardcover_api"] = {
     me = function() return { id = 42 } end,
     query = function(_self, query, variables)
@@ -138,31 +147,46 @@ test("linkBook stores a Bookshelf-owned link", function()
     assert(link.title == "A Book", "missing title")
 end)
 
-test("enrichBook fills only missing description and missing cover", function()
+test("enrichBook shows Hardcover cover/description only on an explicit flag", function()
     reset()
-    assert(Hardcover.linkBook("/books/a.epub", { id = 123, title = "A Book" }))
+    -- /books/a.epub is linked via reset() (book_id 123, edition 456). Mutate
+    -- that link's flags directly rather than via linkBook, which would create a
+    -- shadowing internal link.
     settings.bookshelf_hardcover_enrichment = {
-        ["123"] = {
+        ["123:456"] = {
             description = "Cached description.",
             cover_path = "/tmp/cached-cover.jpg",
         },
     }
     Hardcover.invalidate()
 
+    -- Unset flags: nothing is adopted, even though the book has no cover or
+    -- description of its own (there is no live "fill when missing" any more).
+    local none = Hardcover.enrichBook{
+        filepath = "/books/a.epub", title = "A Book", has_cover = false,
+    }
+    assert(none.description == nil, "adopted a description with no explicit flag")
+    assert(none.cover_image_path == nil, "adopted a cover with no explicit flag")
+
+    -- Explicit flags on: adopt the cached values (cover falls back to the
+    -- download path since the stub reports no custom .sdr cover).
+    hc_settings.books["/books/a.epub"].use_description = true
+    hc_settings.books["/books/a.epub"].use_cover       = true
+    Hardcover.invalidate()
     local book = Hardcover.enrichBook{
-        filepath = "/books/a.epub",
-        title = "A Book",
-        has_cover = false,
+        filepath = "/books/a.epub", title = "A Book", has_cover = false,
     }
     assert(book.description == "Cached description.", tostring(book.description))
     assert(book.cover_image_path == "/tmp/cached-cover.jpg", tostring(book.cover_image_path))
     assert(book.hardcover_description == true, "description marker missing")
     assert(book.hardcover_cover == true, "cover marker missing")
 
+    -- Explicit off: the book's own values are left intact.
+    hc_settings.books["/books/a.epub"].use_description = false
+    hc_settings.books["/books/a.epub"].use_cover       = false
+    Hardcover.invalidate()
     local preserved = Hardcover.enrichBook{
-        filepath = "/books/a.epub",
-        description = "Local description.",
-        has_cover = true,
+        filepath = "/books/a.epub", description = "Local description.", has_cover = true,
     }
     assert(preserved.description == "Local description.", "overwrote local description")
     assert(preserved.cover_image_path == nil, "overwrote local cover")
@@ -390,6 +414,20 @@ test("autoDecideFlags keeps the embedded cover when sizes can't be compared", fu
     assert(not called, "unknown dimensions must not trigger a swap")
 end)
 
+test("autoDecideFlags records keep-own decisions as explicit false", function()
+    reset()
+    -- Larger embedded cover + the book's own description: keep both, but record
+    -- the decision as explicit false (not nil) so a refresh sees it as decided.
+    Hardcover.autoDecideFlags(
+        { filepath = "/books/a.epub", has_cover = true, cover_sizetag = "1600x2400",
+          description = "Own description" },
+        { description = "HC desc", cover_path = "/tmp/x.jpg",
+          cover_width = 400, cover_height = 600 })
+    local link = Hardcover.getLink("/books/a.epub")
+    assert(link.use_cover == false, "keep-own cover should record explicit false")
+    assert(link.use_description == false, "keep-own description should record explicit false")
+end)
+
 test("autoDecideFlags never overrides an explicit user choice", function()
     reset()
     hc_settings.books["/books/a.epub"].use_cover       = false
@@ -406,41 +444,39 @@ test("autoDecideFlags never overrides an explicit user choice", function()
     assert(not touched, "a decided flag (true/false) must not be re-touched")
 end)
 
-test("autoDecideFlags honours disabled global fill switches", function()
+test("autoDecideFlags applies the defaults unconditionally (no global gate)", function()
     reset()
+    -- The old global fill switches are gone; even with their former keys set
+    -- false, the auto-decision still adopts a missing cover/description.
     settings.bookshelf_hardcover_fill_covers       = false
     settings.bookshelf_hardcover_fill_descriptions = false
     local orig_c, orig_d = Hardcover.setUseCover, Hardcover.setUseDescription
-    local touched = false
-    Hardcover.setUseCover       = function() touched = true; return true end
-    Hardcover.setUseDescription = function() touched = true; return true end
+    local calls = {}
+    Hardcover.setUseCover       = function(_fp, en) calls.cover = en; return true end
+    Hardcover.setUseDescription = function(_fp, en) calls.desc  = en; return true end
     Hardcover.autoDecideFlags(
         { filepath = "/books/a.epub", has_cover = false, description = nil },
         { description = "x", cover_path = "/tmp/x.jpg", cover_width = 9, cover_height = 9 })
     Hardcover.setUseCover, Hardcover.setUseDescription = orig_c, orig_d
-    assert(not touched, "auto-enable must respect the global fill settings")
+    assert(calls.cover == true, "cover default must apply with no global gate")
+    assert(calls.desc  == true, "description default must apply with no global gate")
 end)
 
--- ─── Pass-1 effective-state flag display ─────────────────────────────────────
+-- ─── Per-book flag display ───────────────────────────────────────────────────
 
-test("getEnrichmentFlags reports an auto-filled cover as effectively on", function()
+test("getEnrichmentFlags reflects the explicit per-book flags", function()
     reset()
-    -- Cache enrichment carrying a cover + description for linked book A.
-    settings.bookshelf_hardcover_enrichment = {
-        ["123:456"] = { cover_path = "/tmp/x.jpg", description = "Desc" },
-    }
+    -- No flag set -> off (a Hardcover cover only shows on an explicit flag now).
+    local f = Hardcover.getEnrichmentFlags("/books/a.epub")
+    assert(f and f.use_cover == false,       "unset cover flag should read as off")
+    assert(f and f.use_description == false,  "unset description flag should read as off")
+    -- Explicit flags are reflected verbatim.
+    hc_settings.books["/books/a.epub"].use_cover       = true
+    hc_settings.books["/books/a.epub"].use_description = false
     Hardcover.invalidate()
-    -- Undecided flags + a book with no cover/description: the global fill
-    -- default would render Hardcover's, so the toggles read ON.
-    local f = Hardcover.getEnrichmentFlags("/books/a.epub",
-        { has_cover = false, description = nil })
-    assert(f and f.use_cover == true,       "filled cover should read as on")
-    assert(f and f.use_description == true,  "filled description should read as on")
-    -- A book that already has its own cover/description: nothing filled -> off.
-    local g = Hardcover.getEnrichmentFlags("/books/a.epub",
-        { has_cover = true, description = "Own description" })
-    assert(g and g.use_cover == false,       "embedded cover should read as off")
-    assert(g and g.use_description == false, "own description should read as off")
+    local g = Hardcover.getEnrichmentFlags("/books/a.epub")
+    assert(g and g.use_cover == true,        "explicit on should read as on")
+    assert(g and g.use_description == false,  "explicit off should read as off")
 end)
 
 io.stdout:write(("PASS %d  FAIL %d\n"):format(pass, fail))
