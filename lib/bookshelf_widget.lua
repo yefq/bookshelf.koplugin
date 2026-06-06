@@ -7739,14 +7739,11 @@ function BookshelfWidget:_openHardcoverMenu(book)
             return (flagOn("use_cover") and CHK_ON or CHK_OFF) .. _("Use Hardcover image")
         end,
         callback = function()
-            local _t0 = _gettime()
             local ok, err = Hardcover.setUseCover(book.filepath, not flagOn("use_cover"))
-            local _t_set = _gettime()
             if not ok then bw:_hardcoverToast(tostring(err or _("Could not update")), 5) end
             -- Light refresh: the render now prefers cover_image_path directly
             -- (see SpineWidget._renderCover), so no BIM re-extract is needed.
             refreshAfterAction("hardcover-use-cover")
-            local _t_refresh = _gettime()
             -- reinit() rebuilds the button tree so the ☑/☐ text_func
             -- re-evaluates, but doesn't repaint itself. The full-screen
             -- _rebuild refresh used to redraw the dialog as a side effect;
@@ -7756,10 +7753,6 @@ function BookshelfWidget:_openHardcoverMenu(book)
                 dialog:reinit()
                 UIManager:setDirty(dialog, "ui")
             end
-            logger.dbg(string.format(
-                "[hc diag] use_cover toggle: setUseCover=%.0fms refresh=%.0fms reinit=%.0fms TOTAL=%.0fms",
-                (_t_set - _t0) * 1000, (_t_refresh - _t_set) * 1000,
-                (_gettime() - _t_refresh) * 1000, (_gettime() - _t0) * 1000))
         end,
     }
     local use_desc_button = {
@@ -7767,21 +7760,14 @@ function BookshelfWidget:_openHardcoverMenu(book)
             return (flagOn("use_description") and CHK_ON or CHK_OFF) .. _("Use Hardcover description")
         end,
         callback = function()
-            local _t0 = _gettime()
             Hardcover.setUseDescription(book.filepath, not flagOn("use_description"))
-            local _t_set = _gettime()
             refreshAfterAction("hardcover-use-description")
-            local _t_refresh = _gettime()
             -- See use_cover_button: reinit rebuilds the checkbox text but
             -- the scoped in-place refresh no longer repaints the dialog.
             if dialog and dialog.reinit then
                 dialog:reinit()
                 UIManager:setDirty(dialog, "ui")
             end
-            logger.dbg(string.format(
-                "[hc diag] use_description toggle: setUseDescription=%.0fms refresh=%.0fms reinit=%.0fms TOTAL=%.0fms",
-                (_t_set - _t0) * 1000, (_t_refresh - _t_set) * 1000,
-                (_gettime() - _t_refresh) * 1000, (_gettime() - _t0) * 1000))
         end,
     }
 
