@@ -1187,19 +1187,9 @@ function Settings:_settingsSubItems()
             end,
         },
     }
-    -- Hardcover enrichment: hidden for users who have never used Hardcover
-    -- and don't have the plugin installed; shown when the plugin is available
-    -- OR the user already has Hardcover data (links / cached ratings), so
-    -- past users keep access to their cached data after removing the plugin.
-    local ok_hc, HC = pcall(require, "lib/bookshelf_hardcover")
-    if ok_hc and HC and HC.shouldShowEnrichmentUI and HC.shouldShowEnrichmentUI() then
-        items[#items + 1] = {
-            text                = _("Hardcover enrichment"),
-            sub_item_table_func = function()
-                return self:_hardcoverSubItems()
-            end,
-        }
-    end
+    -- "Hardcover enrichment" was promoted to the top-level Bookshelf menu
+    -- (below Manage collections) -- see main.lua addToMainMenu. It no longer
+    -- lives under Settings.
     items[#items + 1] = {
         text                = _("Advanced settings"),
         sub_item_table_func = function()
