@@ -311,16 +311,30 @@ function BookshelfWidget:init()
         self.key_events.BSFocusDown  = { { "Down"  } }
         self.key_events.BSFocusLeft  = { { "Left"  } }
         self.key_events.BSFocusRight = { { "Right" } }
-        self.key_events.BSKbPress    = { { "Press" } }
-        -- Hold-equivalent for keyboard / d-pad users. Bound to two
-        -- chords so users have an option regardless of their device:
-        --   * Menu key: instant; standard on Kindle / Kobo hardware.
-        --   * Shift + Press: works on every keyboard (desktop, external
-        --     keyboards, on-screen keyboards). Chord rather than
-        --     long-press-on-Enter so we don't add latency to taps.
-        self.key_events.BSKbHold     = {
-            { "Menu" },
+        self.key_events.BSKbPress = { { "Press" } }
+        -- Context-menu ("hold") gesture. Non-touch devices have no real
+        -- long-press; KOReader's FocusManager maps hold to modifier+Press
+        -- chords, so we mirror exactly those (focusmanager.lua HoldShift /
+        -- HoldScreenKB / HoldSymAA):
+        --   * ScreenKB+Press -- the standard on Kindle 4/5 (hasScreenKB)
+        --   * Shift+Press    -- external / desktop keyboards
+        --   * Sym+AA         -- other key layouts
+        -- Deliberately NOT { "Menu" }: that's KOReader's own open-menu key
+        -- on normal-keys hardware (FileManagerMenu.KeyPressShowMenu), and
+        -- binding it stole the KOReader menu on physical-Menu devices like
+        -- the Kindle 4 -- the bug this fix exists to undo.
+        --
+        -- An earlier revision derived hold from Press *duration* (no modifier
+        -- needed). It worked, but (a) diverged from KOReader convention --
+        -- Kindle users expect ScreenKB+Press, not a plain long-press on the
+        -- centre key -- and (b) cost tap latency: a tap couldn't fire until
+        -- key-release, because we had to wait and see if it became a hold.
+        -- Binding the chords instead means a plain Press acts instantly on
+        -- press-down again, which is the more noticeable everyday win.
+        self.key_events.BSKbHold = {
+            { "ScreenKB", "Press" },
             { "Shift", "Press" },
+            { "Sym", "AA" },
         }
     end
 
@@ -4994,7 +5008,8 @@ function BookshelfWidget:onBSKbPress()
 end
 
 -- onBSKbHold: keyboard / d-pad equivalent of long-press. Triggered by
--- the Menu key OR Shift+Press chord (defined in init). Dispatches to
+-- the ScreenKB+Press / Shift+Press / Sym+AA chords (defined in init,
+-- mirroring KOReader's FocusManager hold gestures). Dispatches to
 -- the touch on_hold-equivalent for the currently focused zone:
 --   hero  → _openBookMenu(book) on the previewed/lastfile
 --   chips → on_hold(chip_key) which opens the chip editor
