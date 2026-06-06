@@ -1240,6 +1240,69 @@ function Settings:_hardcoverSubItems()
     -- an embedded ISBN / Hardcover id -- the single-book "Auto link" applied
     -- across the library. Throttled to ~1 request/second to stay under
     -- Hardcover's 60/min API limit; shows cancellable progress.
+    -- Shared driver for the long Hardcover scans (auto-link, refresh). Runs one
+    -- item per scheduler tick so the UI event loop keeps running between books:
+    -- the progress message stays tappable (cancel works) and nothing freezes,
+    -- unlike a blocking loop. Network items are paced by `rate` to respect
+    -- Hardcover's ~60/min limit; cheap items just yield a tick.
+    --   opts.items     array to walk
+    --   opts.rate      seconds between network ticks (default 1.2)
+    --   opts.step(item, st) -> did_network   (mutates st counters)
+    --   opts.progress(st, total) -> string   progress message text
+    --   opts.summary(st, total)  -> string   final message text
+    --   opts.on_finish(st)        optional, before the summary shows
+    local function runPacedScan(opts)
+        local InfoMessage = require("ui/widget/infomessage")
+        local items = opts.items
+        local total = #items
+        local rate  = opts.rate or 1.2
+        local st = { i = 0, cancelled = false }
+        -- Ignore taps briefly after start: the tap that launched the scan can
+        -- bleed onto the freshly-shown progress message and cancel it instantly.
+        local armed = false
+        UIManager:scheduleIn(0.6, function() armed = true end)
+        local info
+        -- InfoMessage:onCloseWidget fires dismiss_callback on ANY close, incl.
+        -- our own close when swapping in an updated message. Detach before a
+        -- programmatic close so only a genuine user dismissal counts as cancel.
+        local function closeInfo()
+            if info then
+                info.dismiss_callback = nil
+                UIManager:close(info)
+                info = nil
+            end
+        end
+        local function refresh()
+            closeInfo()
+            info = InfoMessage:new{
+                text = opts.progress(st, total),
+                dismiss_callback = function()
+                    if armed then st.cancelled = true end
+                end,
+            }
+            UIManager:show(info)
+        end
+        local function finish()
+            closeInfo()
+            if opts.on_finish then opts.on_finish(st) end
+            UIManager:show(InfoMessage:new{ text = opts.summary(st, total) })
+        end
+        local step
+        step = function()
+            if st.cancelled or st.i >= total then return finish() end
+            st.i = st.i + 1
+            local did_network = opts.step(items[st.i], st)
+            if did_network or st.i % 10 == 0 or st.i == total then refresh() end
+            if did_network then
+                UIManager:scheduleIn(rate, step)
+            else
+                UIManager:nextTick(step)
+            end
+        end
+        refresh()
+        UIManager:nextTick(step)
+    end
+
     local function autoLinkAll(touchmenu_instance)
         local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
         if not ok_hc or not Hardcover
@@ -1264,105 +1327,67 @@ function Settings:_hardcoverSubItems()
         end
         if touchmenu_instance then UIManager:close(touchmenu_instance) end
 
-        -- Upper-bound time estimate: we can't tell which books carry an id
-        -- without opening each, so quote the worst case (~1.2s per book that
-        -- actually hits the network).
-        local est_min = math.max(1, math.ceil(total * 1.2 / 60))
+        -- Each id-carrying book now costs ~2 Hardcover calls (resolve the link,
+        -- then fetch its details), so pace at ~2.5s/book to stay under the
+        -- ~60/min API limit. Upper-bound estimate: we can't tell which books
+        -- carry an id without opening each, so quote the worst case.
+        local RATE = 2.5
+        local est_min = math.max(1, math.ceil(total * RATE / 60))
         local ConfirmBox = require("ui/widget/confirmbox")
         UIManager:show(ConfirmBox:new{
-            text = T(_("Scan %1 unlinked book(s) and link any that carry an ISBN or Hardcover id?\n\nThis contacts Hardcover at about one book per second (its rate limit), so it can take up to ~%2 min. You can cancel any time."),
+            text = T(_("Scan %1 unlinked book(s), link any that carry an ISBN or Hardcover id, and fetch their Hardcover details?\n\nThis contacts Hardcover (rate-limited), so it can take up to ~%2 min. You can cancel any time."),
                      tostring(total), tostring(est_min)),
             ok_text = _("Auto-link"),
             ok_callback = function()
-                local InfoMessage = require("ui/widget/infomessage")
-                -- Drive the scan through the scheduler rather than a blocking
-                -- Trapper loop: the UI event loop runs between books, so a tap
-                -- on the progress message is handled promptly (the previous
-                -- blocking loop never gave the tap a chance). id-books are paced
-                -- by RATE to respect Hardcover's ~60/min limit; no-id books just
-                -- yield a tick.
-                local RATE = 1.2
-                local st = { i = 0, linked = 0, no_match = 0, no_id = 0,
-                             errors = 0, cancelled = false }
-                -- Ignore taps for a brief moment after start: the tap that
-                -- confirmed "Auto-link" in the ConfirmBox can bleed through onto
-                -- the freshly-shown progress message and cancel it instantly.
-                local armed = false
-                UIManager:scheduleIn(0.6, function() armed = true end)
-                local info
-                -- InfoMessage:onCloseWidget fires dismiss_callback on ANY close,
-                -- including our own UIManager:close() when we swap in an updated
-                -- progress message. Detach the callback before a programmatic
-                -- close so only a genuine user dismissal of the *current* message
-                -- counts as a cancel -- otherwise every refresh() self-cancels the
-                -- scan the moment `armed` turns true.
-                local function closeInfo()
-                    if info then
-                        info.dismiss_callback = nil
-                        UIManager:close(info)
-                        info = nil
-                    end
-                end
-                local function refresh()
-                    closeInfo()
-                    info = InfoMessage:new{
-                        text = T(_("Auto-linking from Hardcover…\n\n%1 / %2 checked  ·  %3 linked\n\n(tap to cancel)"),
-                                 tostring(st.i), tostring(total), tostring(st.linked)),
-                        dismiss_callback = function()
-                            if armed then st.cancelled = true end
-                        end,
-                    }
-                    UIManager:show(info)
-                end
-                local function finish()
-                    closeInfo()
-                    if st.linked > 0 then markDirty("hardcover-auto-link-all") end
-                    local msg = T(_("Auto-link %1\n\nLinked: %2\nNo match: %3\nNo usable id: %4"),
-                                  st.cancelled and _("cancelled") or _("complete"),
-                                  tostring(st.linked), tostring(st.no_match), tostring(st.no_id))
-                    if st.errors > 0 then
-                        msg = msg .. "\n" .. T(_("Errors: %1"), tostring(st.errors))
-                    end
-                    UIManager:show(InfoMessage:new{ text = msg })
-                end
-                local step
-                step = function()
-                    if st.cancelled or st.i >= total then return finish() end
-                    st.i = st.i + 1
-                    local fp = candidates[st.i]
-                    -- One book record reused for the id read + the link, so the
-                    -- EPUB is opened at most once (the read caches identifiers).
-                    local book = { filepath = fp }
-                    local ids = Hardcover.getEmbeddedIdentifiers
-                                and Hardcover.getEmbeddedIdentifiers(book)
-                    local did_network = false
-                    if not ids then
-                        st.no_id = st.no_id + 1
-                    else
-                        did_network = true
+                runPacedScan{
+                    items = candidates,
+                    rate  = RATE,
+                    step = function(fp, st)
+                        -- One book record reused for the id read + the link, so
+                        -- the EPUB is opened at most once.
+                        local book = { filepath = fp }
+                        local ids = Hardcover.getEmbeddedIdentifiers
+                                    and Hardcover.getEmbeddedIdentifiers(book)
+                        if not ids then
+                            st.no_id = (st.no_id or 0) + 1
+                            return false  -- no network, next tick immediately
+                        end
                         local ok_call, linked_ok =
                             pcall(Hardcover.linkFromEmbeddedIdentifiers, book)
                         if not ok_call then
-                            st.errors = st.errors + 1
+                            st.errors = (st.errors or 0) + 1
                         elseif linked_ok then
-                            st.linked = st.linked + 1
+                            st.linked = (st.linked or 0) + 1
+                            -- Fetch details + apply the cover/description
+                            -- decision now, so the book is fully populated in
+                            -- one pass (no separate refresh step needed). A real
+                            -- book record lets the decision compare cover sizes.
+                            local meta = (Repo.buildBookMeta and Repo.buildBookMeta(fp))
+                                         or book
+                            pcall(Hardcover.refreshBook, meta, {})
                         else
-                            st.no_match = st.no_match + 1
+                            st.no_match = (st.no_match or 0) + 1
                         end
-                    end
-                    -- Update the count on each network book (already paced) and
-                    -- occasionally during no-id runs, to avoid rapid flicker.
-                    if did_network or st.i % 10 == 0 or st.i == total then
-                        refresh()
-                    end
-                    if did_network then
-                        UIManager:scheduleIn(RATE, step)
-                    else
-                        UIManager:nextTick(step)
-                    end
-                end
-                refresh()
-                UIManager:nextTick(step)
+                        return true
+                    end,
+                    progress = function(st, n)
+                        return T(_("Auto-linking from Hardcover…\n\n%1 / %2 checked  ·  %3 linked\n\n(tap to cancel)"),
+                                 tostring(st.i), tostring(n), tostring(st.linked or 0))
+                    end,
+                    on_finish = function(st)
+                        if (st.linked or 0) > 0 then markDirty("hardcover-auto-link-all") end
+                    end,
+                    summary = function(st)
+                        local msg = T(_("Auto-link %1\n\nLinked: %2\nNo match: %3\nNo usable id: %4"),
+                                      st.cancelled and _("cancelled") or _("complete"),
+                                      tostring(st.linked or 0), tostring(st.no_match or 0),
+                                      tostring(st.no_id or 0))
+                        if (st.errors or 0) > 0 then
+                            msg = msg .. "\n" .. T(_("Errors: %1"), tostring(st.errors))
+                        end
+                        return msg
+                    end,
+                }
             end,
         })
     end
@@ -1383,29 +1408,16 @@ function Settings:_hardcoverSubItems()
             enabled_func = function() return false end,
         },
         {
-            text = _("Fill missing descriptions from Hardcover"),
-            help_text = _("When a book is linked to Hardcover and Bookshelf has cached a description for it, use that text only if the EPUB has no description of its own."),
-            checked_func = function()
-                return BookshelfSettings.nilOrTrue("hardcover_fill_descriptions")
+            -- Primary action: the first thing a new Hardcover user wants is to
+            -- link their library, so it sits at the top.
+            text = _("Auto-link all books"),
+            help_text = _("Scan the library and link any book that carries an embedded ISBN or Hardcover id, with no manual searching -- the single-book Auto link applied to the whole library. Each linked book also has its Hardcover details (description, cover, rating) fetched in the same pass. Contacts Hardcover (rate-limited) and shows cancellable progress."),
+            enabled_func = function()
+                local ok_hc, HC = pcall(require, "lib/bookshelf_hardcover")
+                return (ok_hc and HC and HC.isAvailable and HC.isAvailable()) or false
             end,
-            keep_menu_open = true,
-            callback = function()
-                local enabled = BookshelfSettings.nilOrTrue("hardcover_fill_descriptions")
-                BookshelfSettings.save("hardcover_fill_descriptions", not enabled)
-                markDirty("hardcover-description-toggle")
-            end,
-        },
-        {
-            text = _("Use Hardcover covers when missing"),
-            help_text = _("When a linked book has no embedded EPUB cover, use the cached Hardcover cover image as a Bookshelf-only fallback. EPUB files are not modified."),
-            checked_func = function()
-                return BookshelfSettings.nilOrTrue("hardcover_fill_covers")
-            end,
-            keep_menu_open = true,
-            callback = function()
-                local enabled = BookshelfSettings.nilOrTrue("hardcover_fill_covers")
-                BookshelfSettings.save("hardcover_fill_covers", not enabled)
-                markDirty("hardcover-cover-toggle")
+            callback = function(touchmenu_instance)
+                autoLinkAll(touchmenu_instance)
             end,
         },
         {
@@ -1433,104 +1445,94 @@ function Settings:_hardcoverSubItems()
             end,
         },
         {
-            text = _("Refresh Hardcover ratings"),
-            help_text = _("Fetch public ratings and review counts for linked Hardcover books and store them in Bookshelf's local cache."),
-            callback = function(touchmenu_instance)
-                if touchmenu_instance then
-                    UIManager:close(touchmenu_instance)
-                end
-                UIManager:nextTick(function()
-                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
-                    if not ok_hc or not Hardcover or not Hardcover.refreshRatingsOnline then
-                        notify(_("Hardcover integration could not be loaded"))
-                        return
-                    end
-                    notify(_("Fetching Hardcover ratings..."), 1)
-                    Hardcover.refreshRatingsOnline(function(ok, stats)
-                        if not ok then
-                            notify(tostring(stats or _("Hardcover ratings refresh failed")), 5)
-                            return
+            -- Maintenance lives one level down: refreshing cached data and
+            -- clearing it are occasional housekeeping, not everyday settings.
+            text = _("Manage Hardcover data"),
+            sub_item_table = {
+                {
+                    -- Auto-link all books now fetches details as it links, so
+                    -- there's no separate "fetch missing data" step. This just
+                    -- keeps the public ratings current as they drift on
+                    -- Hardcover (one batched query, no per-book covers/text).
+                    text = _("Refresh ratings only"),
+                    help_text = _("Fetch up-to-date public ratings and review counts for linked Hardcover books. Covers and descriptions are fetched when a book is linked, so this only updates the ratings."),
+                    callback = function(touchmenu_instance)
+                        if touchmenu_instance then
+                            UIManager:close(touchmenu_instance)
                         end
-                        markDirty("hardcover-ratings-refresh")
-                        stats = type(stats) == "table" and stats or {}
-                        notify(T(_("Hardcover ratings refreshed: %1 rated of %2 linked books"),
-                                 tostring(stats.rated or 0),
-                                 tostring(stats.linked or 0)), 4)
-                    end)
-                end)
-            end,
-        },
-        {
-            text = _("Refresh linked Hardcover metadata"),
-            help_text = _("Fetch descriptions and cover images for books already linked to Hardcover. Rendering never contacts Hardcover; this explicit refresh updates Bookshelf's local cache."),
-            callback = function(touchmenu_instance)
-                if touchmenu_instance then
-                    UIManager:close(touchmenu_instance)
-                end
-                UIManager:nextTick(function()
-                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
-                    if not ok_hc or not Hardcover then
-                        notify(_("Hardcover integration could not be loaded"))
-                        return
-                    end
-                    Hardcover.refreshAllLinkedOnline(function(ok, stats)
-                        if not ok then
-                            notify(tostring(stats or _("Hardcover refresh failed")), 5)
-                            return
+                        UIManager:nextTick(function()
+                            local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                            if not ok_hc or not Hardcover or not Hardcover.refreshRatingsOnline then
+                                notify(_("Hardcover integration could not be loaded"))
+                                return
+                            end
+                            notify(_("Fetching Hardcover ratings..."), 1)
+                            Hardcover.refreshRatingsOnline(function(ok, stats)
+                                if not ok then
+                                    notify(tostring(stats or _("Hardcover ratings refresh failed")), 5)
+                                    return
+                                end
+                                markDirty("hardcover-ratings-refresh")
+                                stats = type(stats) == "table" and stats or {}
+                                notify(T(_("Hardcover ratings refreshed: %1 rated of %2 linked books"),
+                                         tostring(stats.rated or 0),
+                                         tostring(stats.linked or 0)), 4)
+                            end)
+                        end)
+                    end,
+                },
+                {
+                    -- One clear for everything cached. Links are kept, so a
+                    -- refresh repopulates afterwards.
+                    text = _("Clear cache (keeps links)"),
+                    help_text = _("Remove Bookshelf's cached Hardcover descriptions, cover images, ratings, review counts and review text. Existing book links are kept, so you can refresh again later."),
+                    callback = function(touchmenu_instance)
+                        if touchmenu_instance then
+                            UIManager:close(touchmenu_instance)
                         end
-                        markDirty("hardcover-refresh")
-                        notify(T(_("Hardcover metadata refreshed: %1 updated, %2 failed"),
-                                 tostring(stats.updated or 0),
-                                 tostring(stats.failed or 0)), 4)
-                    end)
-                end)
-            end,
-        },
-        {
-            text = _("Auto-link all books"),
-            help_text = _("Scan the library and link any book that carries an embedded ISBN or Hardcover id, with no manual searching -- the single-book Auto link applied to the whole library. Contacts Hardcover (rate-limited to about one book per second) and shows cancellable progress."),
-            enabled_func = function()
-                local ok_hc, HC = pcall(require, "lib/bookshelf_hardcover")
-                return (ok_hc and HC and HC.isAvailable and HC.isAvailable()) or false
-            end,
-            callback = function(touchmenu_instance)
-                autoLinkAll(touchmenu_instance)
-            end,
-        },
-        {
-            text = _("Clear Hardcover cache"),
-            help_text = _("Remove Bookshelf's cached Hardcover descriptions and downloaded cover images. Existing book links are kept."),
-            callback = function(touchmenu_instance)
-                if touchmenu_instance then
-                    UIManager:close(touchmenu_instance)
-                end
-                UIManager:nextTick(function()
-                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
-                    if ok_hc and Hardcover and Hardcover.clearEnrichmentCache then
-                        Hardcover.clearEnrichmentCache()
-                    end
-                    markDirty("hardcover-clear-cache")
-                    notify(_("Hardcover cache cleared"))
-                end)
-            end,
-        },
-        {
-            text = _("Clear cached Hardcover ratings/reviews"),
-            help_text = _("Remove Bookshelf's cached Hardcover ratings, review counts, and review text. Existing links and cached descriptions/covers are kept."),
-            callback = function(touchmenu_instance)
-                if touchmenu_instance then
-                    UIManager:close(touchmenu_instance)
-                end
-                UIManager:nextTick(function()
-                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
-                    if ok_hc and Hardcover then
-                        if Hardcover.clearRatingsCache then Hardcover.clearRatingsCache() end
-                        if Hardcover.clearReviewsCache then Hardcover.clearReviewsCache() end
-                    end
-                    markDirty("hardcover-ratings-clear-cache")
-                    notify(_("Hardcover ratings/reviews cache cleared"))
-                end)
-            end,
+                        UIManager:nextTick(function()
+                            local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                            if ok_hc and Hardcover then
+                                if Hardcover.clearEnrichmentCache then Hardcover.clearEnrichmentCache() end
+                                if Hardcover.clearRatingsCache then Hardcover.clearRatingsCache() end
+                                if Hardcover.clearReviewsCache then Hardcover.clearReviewsCache() end
+                            end
+                            markDirty("hardcover-clear-cache")
+                            notify(_("Hardcover cache cleared"))
+                        end)
+                    end,
+                },
+                {
+                    -- Full reset: unlink everything and undo all changes. Guarded
+                    -- by a warning; only Hardcover-installed covers are removed
+                    -- and any displaced original cover is put back.
+                    text = _("Remove all Hardcover data"),
+                    help_text = _("Unlink every book and delete all cached Hardcover descriptions, covers, ratings and reviews, resetting the library to how it was before any Hardcover linking. Only covers Hardcover added are removed; a cover you had before is restored. Cannot be undone."),
+                    callback = function(touchmenu_instance)
+                        local ConfirmBox = require("ui/widget/confirmbox")
+                        UIManager:show(ConfirmBox:new{
+                            text = _("Remove ALL Hardcover data?\n\nThis unlinks every book and deletes all cached Hardcover covers, descriptions, ratings and reviews. Covers Hardcover saved into book folders are removed and any cover you had before is put back.\n\nThis cannot be undone."),
+                            ok_text = _("Remove all"),
+                            ok_callback = function()
+                                if touchmenu_instance then
+                                    UIManager:close(touchmenu_instance)
+                                end
+                                UIManager:nextTick(function()
+                                    local ok_hc, Hardcover = pcall(require, "lib/bookshelf_hardcover")
+                                    local n = 0
+                                    if ok_hc and Hardcover and Hardcover.removeAllData then
+                                        local ok_run, res = pcall(Hardcover.removeAllData)
+                                        if ok_run then n = res or 0 end
+                                    end
+                                    markDirty("hardcover-remove-all")
+                                    notify(T(_("All Hardcover data removed (%1 book(s) unlinked)."),
+                                             tostring(n)))
+                                end)
+                            end,
+                        })
+                    end,
+                },
+            },
         },
     }
 end
