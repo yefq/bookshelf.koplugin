@@ -4030,16 +4030,37 @@ function Repo.getBySource(source, filter, sort_priority, offset, limit, opts)
             local active = false
             for _k in pairs(filter.statuses) do active = true; break end
             if active then
+                -- .sdr fast-path: a book with no sidecar has never been opened,
+                -- so it's unread by definition. Stat the .sdr (cheap) before the
+                -- much heavier DocSettings:open() in readProgress, and skip the
+                -- open for unread books. Same guard the rating predicate (above)
+                -- and the sort prefetch (below) already use; this loop was the
+                -- one status path missing it, so a status-filtered chip opened
+                -- every sidecar in the library -- ~28s for one chip on a
+                -- 2400-book library on slow flash (issue #113).
+                local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+                local lfs_attr = ok_lfs and lfs and lfs.attributes or nil
                 local kept = {}
                 for _i, b in ipairs(candidates) do
                     local s = b.read_status or b._status
                     if not s and not b._progress_fetched and b.filepath then
-                        local pct, status, rating = Repo.readProgress(b.filepath)
-                        b._pct                = pct
-                        b._status             = status
-                        b.rating              = b.rating or rating
+                        local sdr_path = b.filepath:gsub("%.[^.]+$", "") .. ".sdr"
+                        local has_sdr  = lfs_attr
+                            and lfs_attr(sdr_path, "mode") == "directory"
+                        if has_sdr then
+                            local pct, status, rating = Repo.readProgress(b.filepath)
+                            b._pct            = pct
+                            b._status         = status
+                            b.rating          = b.rating or rating
+                            s = status
+                        else
+                            -- No sidecar -> never opened -> unread. Skip the
+                            -- DocSettings open; leave _pct/_status nil so the
+                            -- normalise step below maps to "unread".
+                            b._pct    = nil
+                            b._status = nil
+                        end
                         b._progress_fetched   = true
-                        s = status
                     end
                     -- Normalise to bookshelf vocabulary (matches the chip
                     -- editor's status IDs: unread / reading / on_hold /
