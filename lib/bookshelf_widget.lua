@@ -5926,12 +5926,22 @@ end
 function BookshelfWidget:_maybeStartChipPreload()
     if self._chip_preload_done then return end
     if self._chip_preload_fn then return end  -- already in flight
+    -- Apply the user's cover-cache budget unconditionally -- it governs the
+    -- next/prev PAGE preload too, which is independent of the chip warm-up
+    -- below. (Belt-and-braces: _schedulePreload also applies it, but a
+    -- single-page chip never calls that.)
+    self:_applyCoverCacheBudget()
+    -- The CHIP warm-up only (the per-chip background pre-build) is disablable
+    -- in Advanced settings (default on). It makes chip switches instant, but on
+    -- a large library with many chips it adds several seconds of post-launch
+    -- work; off = chips build lazily on first switch. This does NOT touch the
+    -- predictive next/prev page preload, which stays on regardless.
+    if not BookshelfSettings.nilOrTrue("prewarm_chip_cache") then return end
     -- v2.3.1 defensive: the always-on background preload is implicated in an
     -- Android crash (reported post-v2.3.0). Skip it on Android until the root
     -- cause is pinned; e-ink devices keep the warm-up.
     if Device:isAndroid() then return end
     if #(self._drilldown_path or {}) ~= 0 then return end
-    self:_applyCoverCacheBudget()
     self._chip_preload_fn = function() self:_chipPreloadStep() end
     UIManager:scheduleIn(CHIP_PRELOAD_DELAY_S, self._chip_preload_fn)
 end
