@@ -7,6 +7,11 @@
 -- finds the file at <plugin_root>/lib/bookshelf_X.lua.
 package.path = "./?.lua;./?/init.lua;" .. package.path
 
+-- Hardcover's enrichment/ratings caches are SQLite-backed (v2.4.2+); install
+-- the in-memory cache fake BEFORE any module that loads bookshelf_hardcover, so
+-- buildBookMeta/getAll enrichment reads exercise the real cache paths.
+local hccache = dofile("tests/_helpers.lua").install_hardcover_cache_fake()
+
 package.loaded["readhistory"] = { hist = {} }
 package.loaded["readcollection"] = { coll = { favorites = {} }, default_collection_name = "favorites" }
 package.loaded["bookinfomanager"] = {
@@ -300,13 +305,12 @@ test("buildBookMeta: Hardcover enrichment never sticks in sticky metadata cache"
             [fp] = { book_id = 123, title = "Remote Link",
                      use_description = true, use_cover = true },
         },
-        bookshelf_hardcover_enrichment = {
-            ["123"] = {
-                description = "Remote description",
-                cover_path = "/tmp/remote-cover.jpg",
-            },
-        },
     }
+    hccache.clear()
+    hccache.seed("enrich", "123", {
+        description = "Remote description",
+        cover_path = "/tmp/remote-cover.jpg",
+    })
     local Hardcover = require("lib/bookshelf_hardcover")
     Hardcover.invalidate()
 
@@ -1010,13 +1014,12 @@ test("getAll: hydrates Hardcover enrichment for book rows", function()
             [fp] = { book_id = 123, title = "Remote Link",
                      use_description = true, use_cover = true },
         },
-        bookshelf_hardcover_enrichment = {
-            ["123"] = {
-                description = "Remote description",
-                cover_path = "/tmp/remote-cover.jpg",
-            },
-        },
     }
+    hccache.clear()
+    hccache.seed("enrich", "123", {
+        description = "Remote description",
+        cover_path = "/tmp/remote-cover.jpg",
+    })
     local Hardcover = require("lib/bookshelf_hardcover")
     Hardcover.invalidate()
     package.loaded["libs/libkoreader-lfs"].dir = function(path)
