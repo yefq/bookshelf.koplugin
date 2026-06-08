@@ -48,6 +48,16 @@ package.loaded["libs/libkoreader-lfs"] = {
 }
 package.loaded["logger"] = { dbg = function() end, info = function() end, warn = function() end, err = function() end }
 
+-- ISO language name lookup used by bookshelf_lang (required by the repo at
+-- load). 3-letter code -> English name, with the real module's code fallback.
+package.loaded["ui/data/isolanguage"] = {
+    getLocalizedLanguage = function(_self, iso3)
+        local N = { eng = "English", deu = "German", fra = "French",
+                    jpn = "Japanese", spa = "Spanish", zho = "Chinese" }
+        return N[iso3] or iso3
+    end,
+}
+
 -- BookshelfSettings stub: reads from the same _test_settings table as
 -- the G_reader_settings stub, but transparently re-prefixes keys with
 -- "bookshelf_". Lets existing tests keep using bookshelf_X keys in
@@ -736,8 +746,8 @@ end)
 -- getLanguages
 -- ============================================================================
 
-test("getLanguages: region variants collapse and display the normalized base code", function()
-    -- All of en / en-US / en-GB should collapse to one card labelled "en".
+test("getLanguages: region variants collapse and display the friendly name", function()
+    -- All of en / en-US / en-GB should collapse to one card labelled "English".
     Repo.invalidateWalkCache()
     Repo.invalidateSeriesCache()
     package.loaded["libs/libkoreader-lfs"].dir = function(path)
@@ -756,8 +766,8 @@ test("getLanguages: region variants collapse and display the normalized base cod
     _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
     local out, total = Repo.getLanguages(10, 0)
     assert(total == 1, "expected 1 group, got " .. tostring(total))
-    assert(out[1].series_name == "en",
-        "expected display label 'en', got '" .. tostring(out[1].series_name) .. "'")
+    assert(out[1].series_name == "English",
+        "expected display label 'English', got '" .. tostring(out[1].series_name) .. "'")
     assert(#out[1].books == 3, "expected 3 books in group, got " .. #out[1].books)
 end)
 
@@ -778,8 +788,8 @@ test("getLanguages: underscore region variants collapse (zh_TW -> zh)", function
     _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
     local out, total = Repo.getLanguages(10, 0)
     assert(total == 1, "expected 1 group, got " .. tostring(total))
-    assert(out[1].series_name == "zh",
-        "expected display label 'zh', got '" .. tostring(out[1].series_name) .. "'")
+    assert(out[1].series_name == "Chinese",
+        "expected display label 'Chinese', got '" .. tostring(out[1].series_name) .. "'")
     assert(#out[1].books == 2, "expected 2 books in group, got " .. #out[1].books)
 end)
 
@@ -800,14 +810,14 @@ test("getLanguages: case-insensitive collapse (EN and en merge)", function()
     _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
     local out, total = Repo.getLanguages(10, 0)
     assert(total == 1, "expected 1 group, got " .. tostring(total))
-    assert(out[1].series_name == "en",
-        "expected display label 'en', got '" .. tostring(out[1].series_name) .. "'")
+    assert(out[1].series_name == "English",
+        "expected display label 'English', got '" .. tostring(out[1].series_name) .. "'")
     assert(#out[1].books == 2, "expected 2 books, got " .. #out[1].books)
 end)
 
-test("getLanguages: long language names are not region-stripped", function()
-    -- "english" (len > 3) should not be treated as a language code and
-    -- stripped to a primary tag — it stays as-is.
+test("getLanguages: full language names resolve to the friendly label", function()
+    -- "English" / "english" both resolve (via the name map) to the same key
+    -- and the same friendly label as "en" / "eng".
     Repo.invalidateWalkCache()
     Repo.invalidateSeriesCache()
     package.loaded["libs/libkoreader-lfs"].dir = function(path)
@@ -823,10 +833,10 @@ test("getLanguages: long language names are not region-stripped", function()
     }
     _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
     local out, total = Repo.getLanguages(10, 0)
-    -- Both lowercase to "english" so they merge; display label is "english".
+    -- Both resolve to "eng" so they merge; display label is "English".
     assert(total == 1, "expected 1 group, got " .. tostring(total))
-    assert(out[1].series_name == "english",
-        "expected 'english', got '" .. tostring(out[1].series_name) .. "'")
+    assert(out[1].series_name == "English",
+        "expected 'English', got '" .. tostring(out[1].series_name) .. "'")
     assert(#out[1].books == 2, "expected 2 books, got " .. #out[1].books)
 end)
 
@@ -852,10 +862,10 @@ test("getLanguages: groups books by language metadata", function()
     }
     _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
     local out, total = Repo.getLanguages(10, 0)
-    -- 4 groups: en (en + en-US collapse), es, fr, and Unknown (untagged).
+    -- 4 groups: English (en + en-US collapse), Spanish, French, Unknown.
     assert(total == 4, "expected 4 language groups, got " .. tostring(total))
-    assert(out[1].series_name == "en", "expected 'en' first, got " .. tostring(out[1].series_name))
-    assert(#out[1].books == 2, "expected 'en' group to have 2 books, got " .. #out[1].books)
+    assert(out[1].series_name == "English", "expected 'English' first, got " .. tostring(out[1].series_name))
+    assert(#out[1].books == 2, "expected the English group to have 2 books, got " .. #out[1].books)
 end)
 
 test("getLanguages: untagged books fall into the Unknown bucket", function()
@@ -901,9 +911,11 @@ test("getLanguages: findGroup resolves a language card by name", function()
     }
     _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
     Repo.getLanguages(10, 0)  -- warm cache
-    local g = Repo.findGroup("language", "fr")
+    -- Cards are labelled with the friendly name now, so drilldown resolves
+    -- by "French" (the card's series_name), not the raw "fr" code.
+    local g = Repo.findGroup("language", "French")
     assert(g ~= nil, "expected a language group")
-    assert(g.series_name == "fr")
+    assert(g.series_name == "French")
     assert(#g.books == 1)
 end)
 
@@ -1418,6 +1430,66 @@ test("getBySource: rating filter finds rated book when metadata is not in a sibl
     assert(total == 1, "expected 1 five-star book, got " .. tostring(total))
     assert(list[1] and list[1].title == "Alpha",
         "expected Alpha, got " .. tostring(list[1] and list[1].title))
+end)
+
+-- ============================================================================
+-- Languages grouping: every spelling of a language (2-letter, 3-letter,
+-- region-tagged, full name) must collapse into one card with a friendly,
+-- localised label -- not split across cards labelled with raw codes (#114
+-- follow-up). bookshelf_lang.canonical owns the mapping; this checks the
+-- repository wires grouping through it.
+-- ============================================================================
+
+local function _setupLangLibrary()
+    Repo.invalidateWalkCache()
+    _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 2 }
+    _G._test_bim_data = {
+        ["/lib/a.epub"] = { title = "A", language = "en" },
+        ["/lib/b.epub"] = { title = "B", language = "eng" },
+        ["/lib/c.epub"] = { title = "C", language = "English" },
+        ["/lib/d.epub"] = { title = "D", language = "en-GB" },
+        ["/lib/e.epub"] = { title = "E", language = "de" },
+        ["/lib/f.epub"] = { title = "F" },  -- no language -> Unknown
+    }
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        local files = path == "/lib"
+            and { ".", "..", "a.epub", "b.epub", "c.epub", "d.epub", "e.epub", "f.epub" }
+            or {}
+        local i = 0
+        return function() i = i + 1; return files[i] end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(fp, key)
+        if key == nil then return { mode = "file", modification = 0 } end
+        if key == "mode" then return "file" end
+        if key == "modification" then return 0 end
+        return nil
+    end
+    package.loaded["bookinfomanager"] = {
+        getBookInfo = function(_self, fp) return _G._test_bim_data and _G._test_bim_data[fp] end,
+    }
+end
+
+test("getLanguages: en / eng / en-GB / English collapse into one 'English' card", function()
+    _setupLangLibrary()
+    local groups = Repo.getLanguages(20)
+    Repo.invalidateWalkCache()
+    local by_label = {}
+    for _i, g in ipairs(groups) do by_label[g.series_name] = #g.books end
+    assert(by_label["English"] == 4,
+        "expected 4 books under English, got " .. tostring(by_label["English"]))
+    assert(by_label["German"] == 1,
+        "expected 1 book under German, got " .. tostring(by_label["German"]))
+    -- No raw-code labels leaked through.
+    assert(by_label["en"] == nil and by_label["eng"] == nil and by_label["english"] == nil,
+        "raw-code language label leaked into a card")
+end)
+
+test("getBySource: a language chip (source.id = display label) matches all variants", function()
+    _setupLangLibrary()
+    -- A chip created from the English card carries its display label as id.
+    local list, total = Repo.getBySource({ kind = "language", id = "English" }, nil, nil, 0, 20)
+    Repo.invalidateWalkCache()
+    assert(total == 4, "expected 4 English books via chip, got " .. tostring(total))
 end)
 
 -- ============================================================================

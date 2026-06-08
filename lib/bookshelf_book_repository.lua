@@ -346,6 +346,7 @@ local _SORT_VALID = {
 -- be deleted.
 local TabModel   = require("lib/bookshelf_tab_model")
 local SortEngine = require("lib/bookshelf_sort_engine")
+local BookshelfLang = require("lib/bookshelf_lang")
 
 function Repo.getSortPriority(tab_id)
     local tab = TabModel.getById(tab_id)
@@ -2949,6 +2950,10 @@ local function _buildGroups(group_kind, key_fn, multi)
                 if not multi then keys = { keys } end
                 for _i, raw_k in ipairs(keys) do
                     if raw_k and raw_k ~= "" then
+                        -- For language, resolve the canonical key + friendly
+                        -- label once (carried into the display block below).
+                        local lang_label
+
                         -- Key on the normalised form per group kind:
                         --   genre  → lowercase + simple plural collapse
                         --            ("Mystery" / "mystery" / "Mysteries")
@@ -2963,7 +2968,13 @@ local function _buildGroups(group_kind, key_fn, multi)
                         elseif group_kind == "author" then
                             lookup_k = _normalizeAuthor(raw_k)
                         elseif group_kind == "language" then
-                            lookup_k = _normalizeLang(raw_k)
+                            if raw_k == _LANG_UNKNOWN_KEY then
+                                lookup_k = _LANG_UNKNOWN_KEY
+                            else
+                                local ck, cl = BookshelfLang.canonical(raw_k)
+                                lookup_k   = ck or _normalizeLang(raw_k)
+                                lang_label = cl
+                            end
                         else
                             lookup_k = raw_k
                         end
@@ -2985,10 +2996,11 @@ local function _buildGroups(group_kind, key_fn, multi)
                                 if raw_k == _LANG_UNKNOWN_KEY then
                                     display_name = tr("Unknown")
                                 else
-                                    -- Always display the normalized form (e.g. "en"
-                                    -- rather than "en-US") so all region variants of
-                                    -- the same language show a consistent label.
-                                    display_name = lookup_k
+                                    -- Friendly, localised name from
+                                    -- bookshelf_lang (e.g. "English" for any of
+                                    -- en / eng / en-GB / English). Falls back to
+                                    -- the canonical key if no name resolved.
+                                    display_name = lang_label or lookup_k
                                 end
                             end
                             g = {
@@ -4104,15 +4116,22 @@ function Repo.getBySource(source, filter, sort_priority, offset, limit, opts)
                 return _formatKey(b.filepath) == target
             end)
         elseif kind == "language" then
-            local unknown_norm = _normalizeLang(tr("Unknown"))
-            local target_norm = _normalizeLang(source.id or "")
-            if target_norm == "" or target_norm == unknown_norm then
+            -- The chip's id is the language card's display label (e.g.
+            -- "English") or, for older paths, a code. Canonicalise it the same
+            -- way book languages are canonicalised so every spelling matches
+            -- (en / eng / en-GB / English -> one key). Mirrors _buildGroups.
+            local raw_id     = source.id or ""
+            local target_key = BookshelfLang.canonical(raw_id)
+            local is_unknown = raw_id == "" or raw_id == _LANG_UNKNOWN_KEY
+                or _normalizeLang(raw_id) == _normalizeLang(tr("Unknown"))
+            if is_unknown or not target_key then
                 candidates = loadCandidatesByPredicate(function(b)
                     return b.lang == nil or b.lang == ""
                 end)
             else
                 candidates = loadCandidatesByPredicate(function(b)
-                    return b.lang and _normalizeLang(b.lang) == target_norm
+                    if b.lang == nil or b.lang == "" then return false end
+                    return BookshelfLang.canonical(b.lang) == target_key
                 end)
             end
         elseif kind == "rating" then
