@@ -288,6 +288,14 @@ local RoundedCornerCard = Widget:extend{
     radius       = 0,
     border_size  = 0,
     border_color = nil,                       -- defaults to COLOR_BLACK
+    border_hidden = nil,                      -- keep the border GEOMETRY (inner
+                                              -- stays inset by border_size) but skip
+                                              -- painting the line. Used by the
+                                              -- on-hold fade: the cover image was
+                                              -- sized for a bordered card, so
+                                              -- zeroing border_size instead would
+                                              -- shift it up-left and shrink it
+                                              -- relative to its shelf neighbours.
     bg_color     = nil,                       -- page bg (default COLOR_WHITE)
     fade_by      = nil,                        -- 0..1 white-blend over the inner
                                                -- cover (on-hold de-emphasis); nil = none
@@ -425,7 +433,7 @@ function RoundedCornerCard:paintTo(bb, x, y)
             end
         end
     end
-    if self.border_size and self.border_size > 0 then
+    if self.border_size and self.border_size > 0 and not self.border_hidden then
         -- Honour the user's "Border color" setting when the SpineWidget
         -- doesn't set border_color explicitly. resolvedColors().border
         -- defaults to black + adapts to night mode + color panels per
@@ -1313,9 +1321,16 @@ function SpineWidget:_wrapCoverInCard(cover_inner, card_w, card_h, border)
         width       = card_w,
         height      = card_h,
         radius      = CARD_RADIUS,
-        border_size = on_hold_fade and 0 or border,
+        border_size = border,
     }
     if on_hold_fade then
+        -- Hide the border line but KEEP its geometry: the cover image was
+        -- sized and inset for a bordered card, so zeroing border_size here
+        -- painted it border-width up-left and 2x border smaller than its
+        -- shelf neighbours. The faded cover must occupy exactly the same
+        -- pixels as it did before going on hold -- only the hairline and
+        -- the shadow disappear.
+        cover_args.border_hidden = true
         cover_args.fade_by = ON_HOLD_FADE
         -- No shadow_color: with the drop shadow removed the corner mask must
         -- restore plain page bg, not shadow grey.
