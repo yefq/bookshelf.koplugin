@@ -336,6 +336,28 @@ function M.buildGlyphWidget(glyph_char, size, color, face_name)
     }
 end
 
+-- Memoized rendered height of a bare glyph. The status-badge paths each
+-- built a throwaway TextWidget PER SPINE PER PAINT just to measure a
+-- height that's constant for a given (glyph, size, face) -- a full page
+-- repaint did up to 16 spines x ~3 probes of shaping work for values
+-- that never change. Font metrics are fixed at runtime, and the user's
+-- badge-scale setting feeds into `size`, so the key self-invalidates
+-- when the scale changes. Colour doesn't affect metrics, so the probe
+-- always measures in BLACK.
+local _glyph_h_memo = {}
+function M.glyphRenderedH(glyph_char, size, face_name)
+    local key = (face_name or "symbols") .. "\1" .. size .. "\1" .. glyph_char
+    local h = _glyph_h_memo[key]
+    if not h then
+        local probe = M.buildGlyphWidget(glyph_char, size,
+            Blitbuffer.COLOR_BLACK, face_name)
+        h = probe:getSize().h
+        probe:free()
+        _glyph_h_memo[key] = h
+    end
+    return h
+end
+
 -- Build a halo'd glyph. The glyph is painted in `halo_color` at every
 -- cell of a (2*halo_w + 1) x (2*halo_w + 1) offset grid (skipping the
 -- centre), then in `centre_color` at the centre. The offset paints

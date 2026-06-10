@@ -846,14 +846,18 @@ function BookshelfWidget:_rebuild()
     -- now". Tap when unselected clears the preview so the hero falls
     -- back to the lastfile; tap when selected is a no-op. Fixed-width
     -- via `action = true` so it doesn't shrink the navigation tabs.
-    local _lastfile = Repo.getCurrent and Repo.getCurrent()
+    -- Only the PATH is needed for the selected-state comparison below, so
+    -- use currentFilepath() - the full getCurrent() pays a BIM cover-blob
+    -- decode + DocSettings parse, and this runs on every chip-bar rebuild
+    -- (issue #103's side door).
+    local _lastfile_fp = Repo.currentFilepath and Repo.currentFilepath()
     -- The "currently reading" chip's selected state means "the lastfile is
     -- the book the hero is showing right now". In expanded mode there's no
     -- visible hero, so the chip is always deselected — tapping it acts as
     -- "restore hero on the lastfile" (clears _expanded AND _preview_book).
     local current_in_hero = (not self._expanded)
         and ((not self._preview_book)
-             or (_lastfile and self._preview_book.filepath == _lastfile.filepath))
+             or (_lastfile_fp and self._preview_book.filepath == _lastfile_fp))
     active_chips[#active_chips + 1] = {
         key        = "current",
         nerd_glyph = "\xEE\x9E\xBD",  -- material design open-book (U+E7BD)
@@ -898,7 +902,10 @@ function BookshelfWidget:_rebuild()
         for _i, c in ipairs(active_chips) do
             if not c.action then self.chip = c.key; break end
         end
-        BookshelfSettings.save("active_chip", self.chip)
+        -- Deferred: this runs inside the rebuild path, whose
+        -- _persistNavState owns the coalesced flush. A sync save here
+        -- cost a full settings-file write (~140ms on Kindle flash).
+        BookshelfSettings.saveDeferred("active_chip", self.chip)
     end
     -- Append a search "chip" (icon-only, action-on-tap rather than
     -- chip-switch). Always appended last so it sits at the right edge.
@@ -997,7 +1004,7 @@ function BookshelfWidget:_rebuild()
         local probe_book = (self._preview_book and self._preview_book.filepath
                             and Repo.buildBook(self._preview_book.filepath))
                             or self._preview_book
-                            or (Repo.getCurrent and Repo.getCurrent())
+                            or self:_currentHeroBook()
         -- Hand the freshly-built probe record off to _buildHero so it
         -- doesn't pay another DocSettings:open() for the same filepath
         -- in the same rebuild cycle. Only when the probe built a
@@ -1238,7 +1245,10 @@ function BookshelfWidget:_rebuild()
             self.chip            = key
             self._cursor         = 1
             self:_syncPageFromCursor()
-            BookshelfSettings.save("active_chip", key)
+            -- Deferred: _rebuild's _persistNavState saves + schedules the
+            -- coalesced flush; a sync save here added a ~140ms file write
+            -- to every chip tap.
+            BookshelfSettings.saveDeferred("active_chip", key)
             self:_rebuild()
             UIManager:setDirty(self, "ui")
         end,
@@ -1959,8 +1969,9 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, he
     if self._preview_book and self._preview_book.filepath then
         hero_fp = self._preview_book.filepath
     else
-        local cur = Repo.getCurrent and Repo.getCurrent()
-        hero_fp = cur and cur.filepath
+        -- Path only - don't pay getCurrent()'s BIM read just to learn
+        -- which file to queue (issue #103's side door).
+        hero_fp = Repo.currentFilepath and Repo.currentFilepath()
     end
     if hero_fp then maybe_queue(hero_fp) end
     logger.dbg(string.format("[bookshelf perf] _kickOffMeta: queued=%d displayed=%d",
@@ -2272,8 +2283,10 @@ function BookshelfWidget:_pollExtraction()
             if self._preview_book then
                 hero_fp = self._preview_book.filepath
             else
-                local cur = Repo.getCurrent and Repo.getCurrent()
-                hero_fp = cur and cur.filepath
+                -- Path only - this runs on every extraction-poll tick, so
+                -- getCurrent()'s BIM read here was a per-tick tax while
+                -- covers extract (issue #103's side door).
+                hero_fp = Repo.currentFilepath and Repo.currentFilepath()
             end
             if hero_fp and ready_paths[hero_fp] then
                 self:_swapHeroInPlace()
@@ -2323,33 +2336,70 @@ function BookshelfWidget:_fetchChipItems(n)
     -- backing out of a drilled-into author) would read freed memory and
     -- the search result covers would corrupt (memory feedback:
     -- feedback_image_disposable_shared_book).
+    -- Hydrate only the VISIBLE page slice of the combined result list
+    -- (folders ++ authors ++ series ++ genres ++ books, in that order) and
+    -- return the total so the caller's _total_hint pagination takes over.
+    -- Previously this hydrated EVERY match -- a broad query over a large
+    -- library decoded hundreds of cover BlitBuffers per render (the same
+    -- unbounded-hydration shape that OOM-killed group drilldowns in
+    -- issue #17). Covers already in ScaledCoverCache skip the BIM zstd
+    -- decode via want_cover=false; SpineWidget repaints them from the
+    -- cache by filepath key.
     if tip and tip.kind == "search" then
+        local pay      = tip.payload
+        local folders  = pay.folders or {}
+        local authors  = pay.author_names or {}
+        local series   = pay.series_names or {}
+        local genres   = pay.genre_names or {}
+        local book_fps = pay.book_fps or {}
+        local total    = #folders + #authors + #series + #genres + #book_fps
+        local offset   = math.max(0, (self._cursor or 1) - 1)
+        local stop     = math.min(offset + self:_viewSize(), total)
+        local ScaledCoverCache = require("lib/bookshelf_scaled_cover_cache")
+        local function lazyMeta(fp)
+            if not fp then return nil end
+            local meta_opts
+            if ScaledCoverCache:has(fp) then
+                meta_opts = { want_cover = false }
+            end
+            return Repo.buildBookMeta(fp, meta_opts)
+        end
         local fresh = {}
-        for _i, f in ipairs(tip.payload.folders or {}) do
-            fresh[#fresh + 1] = {
-                kind       = "folder",
-                path       = f.path,
-                label      = f.label,
-                first_book = f.first_book_fp and Repo.buildBookMeta(f.first_book_fp),
-            }
+        for i = offset + 1, stop do
+            local idx, item = i, nil
+            if idx <= #folders then
+                local f = folders[idx]
+                item = {
+                    kind       = "folder",
+                    path       = f.path,
+                    label      = f.label,
+                    first_book = lazyMeta(f.first_book_fp),
+                }
+            else
+                idx = idx - #folders
+                if idx <= #authors then
+                    item = Repo.findGroup("author", authors[idx])
+                else
+                    idx = idx - #authors
+                    if idx <= #series then
+                        item = Repo.findGroup("series", series[idx])
+                    else
+                        idx = idx - #series
+                        if idx <= #genres then
+                            item = Repo.findGroup("genre", genres[idx])
+                        else
+                            idx = idx - #genres
+                            item = lazyMeta(book_fps[idx])
+                        end
+                    end
+                end
+            end
+            -- findGroup / buildBookMeta can return nil for stale
+            -- identifiers (book deleted since the search ran); skip the
+            -- hole -- a partial page is fine, same as the last page.
+            if item then fresh[#fresh + 1] = item end
         end
-        for _i, name in ipairs(tip.payload.author_names or {}) do
-            local g = Repo.findGroup("author", name)
-            if g then fresh[#fresh + 1] = g end
-        end
-        for _i, name in ipairs(tip.payload.series_names or {}) do
-            local g = Repo.findGroup("series", name)
-            if g then fresh[#fresh + 1] = g end
-        end
-        for _i, name in ipairs(tip.payload.genre_names or {}) do
-            local g = Repo.findGroup("genre", name)
-            if g then fresh[#fresh + 1] = g end
-        end
-        for _i, fp in ipairs(tip.payload.book_fps or {}) do
-            local b = Repo.buildBookMeta(fp)
-            if b then fresh[#fresh + 1] = b end
-        end
-        return fresh
+        return fresh, total
     end
     -- Drill into a group (series / author / genre / tag): build Book records
     -- only for the visible page slice. Previously this iterated every book in
@@ -2369,10 +2419,20 @@ function BookshelfWidget:_fetchChipItems(n)
         -- in _rebuild keeps cursor within range; defensive guard here too.
         local offset = math.max(0, (self._cursor or 1) - 1)
         local stop = math.min(offset + self:_viewSize(), total)
+        local ScaledCoverCache = require("lib/bookshelf_scaled_cover_cache")
         local fresh = {}
         for i = offset + 1, stop do
             local b = books[i]
-            local nb = b.filepath and Repo.buildBookMeta(b.filepath) or b
+            local nb = b
+            if b.filepath then
+                -- Covers already in ScaledCoverCache skip the BIM zstd
+                -- decode; SpineWidget repaints from the cache by filepath.
+                local meta_opts
+                if ScaledCoverCache:has(b.filepath) then
+                    meta_opts = { want_cover = false }
+                end
+                nb = Repo.buildBookMeta(b.filepath, meta_opts) or b
+            end
             fresh[#fresh + 1] = nb
         end
         return fresh, total
@@ -2816,7 +2876,9 @@ function BookshelfWidget:_buildExpandedStrip(content_w, strip_h, PAD)
     local current = (self._preview_book and self._preview_book.filepath
                      and Repo.buildBook(self._preview_book.filepath))
                      or self._preview_book
-                     or (Repo.getCurrent and Repo.getCurrent())
+                     -- Memoised; the strip renders status text only (no
+                     -- cover), so the cover-stripped memo record is fine.
+                     or self:_currentHeroBook()
 
     -- No hairline: the chip strip below acts as the visual separator already.
     local status_row = HeroCard.buildStatusRow(current, self:_buildDeviceState(),
@@ -3980,9 +4042,12 @@ function BookshelfWidget:softRefresh()
     -- bar / bookmark glyph picks up the new percent_finished without the
     -- user needing to swipe-down. onCloseDocument invalidated the progress
     -- cache for this fp already; buildBookMeta returns fresh data.
-    local lastfile = Repo.getCurrent and Repo.getCurrent()
-    if lastfile and lastfile.filepath then
-        self:_refreshSpineInPlace(lastfile.filepath)
+    -- Path only - getCurrent()'s BIM read is at its most contended right
+    -- after a book close (extraction often resumes), and the spine
+    -- refresh only needs to know WHICH file to repaint.
+    local lastfile_fp = Repo.currentFilepath and Repo.currentFilepath()
+    if lastfile_fp then
+        self:_refreshSpineInPlace(lastfile_fp)
     end
     if not self:_needsReaderReturnShelfRefresh() then
         return
@@ -4086,7 +4151,10 @@ function BookshelfWidget:_swapHeroRightColumnInPlace(regions, region_hint)
     if not self._hero_parent then return false end
     local hero = self._hero_card or self._hero_parent[1]
     if not hero or not hero.replaceRightColumn then return false end
-    local current = self._preview_book or (Repo.getCurrent and Repo.getCurrent()) or hero.book
+    -- Memoised: this path fires on every minute tick / charging / wifi
+    -- event and on each line-editor keystroke; the right column renders
+    -- text only, so the cover-stripped memo record is fine.
+    local current = self._preview_book or self:_currentHeroBook() or hero.book
     if current and Repo.enrichStats then
         Repo.enrichStats(current)
     end
@@ -4139,9 +4207,11 @@ function BookshelfWidget:_previewBook(book, tap_t)
     -- preview-matches-lastfile (selected) and preview-is-different
     -- (unselected); rendering that flip needs a chip-strip rebuild
     -- since _swapHeroInPlace only touches the hero card.
-    local lastfile = Repo.getCurrent and Repo.getCurrent()
-    local was_diff = self._preview_book and lastfile
-                     and self._preview_book.filepath ~= lastfile.filepath
+    -- Path only - both diff checks below compare filepaths; this runs on
+    -- every preview tap, directly in the tap-latency path.
+    local lastfile_fp = Repo.currentFilepath and Repo.currentFilepath()
+    local was_diff = self._preview_book and lastfile_fp
+                     and self._preview_book.filepath ~= lastfile_fp
     -- Capture the previously-selected filepath BEFORE the assignment below
     -- so _repaintSelectionHighlight can deselect the old spine.
     local prior_preview_fp = self._preview_book and self._preview_book.filepath
@@ -4164,8 +4234,8 @@ function BookshelfWidget:_previewBook(book, tap_t)
     logger.dbg(string.format(
         "[bookshelf perf] _previewBook: buildBook=%.0fms",
         (_perf_t2 - _perf_t1) * 1000))
-    local is_diff = self._preview_book and lastfile
-                    and self._preview_book.filepath ~= lastfile.filepath
+    local is_diff = self._preview_book and lastfile_fp
+                    and self._preview_book.filepath ~= lastfile_fp
 
     -- Selection-state boundary crossed → full rebuild (cheap; chip strip
     -- + shelves + footer in one pass) so the "currently reading" action
@@ -4940,7 +5010,7 @@ end
 function BookshelfWidget:onBSKbPress()
     if self._focus_zone == "hero" then
         local book = self._preview_book
-            or (Repo.getCurrent and Repo.getCurrent())
+            or self:_currentHeroBook()
         if book then
             self:_clearDpadFocus()
             self:_swapHeroInPlace()
@@ -5108,7 +5178,7 @@ function BookshelfWidget:onBSKbHold()
     if self._focus_zone == "hero" then
         if self._selection and self._selection:isActive() then return true end
         local book = self._preview_book
-            or (Repo.getCurrent and Repo.getCurrent())
+            or self:_currentHeroBook()
         if book then
             self:_clearDpadFocus()
             self:_openBookMenu(book)
@@ -5182,7 +5252,10 @@ function BookshelfWidget:_setActiveChip(key)
     self.chip            = key
     self._cursor         = 1
     self:_syncPageFromCursor()
-    BookshelfSettings.save("active_chip", key)
+    -- Deferred: _rebuild's _persistNavState saves + schedules the
+    -- coalesced flush; a sync save here added a ~140ms file write to
+    -- every chip swipe.
+    BookshelfSettings.saveDeferred("active_chip", key)
     self:_rebuild()
     UIManager:setDirty(self, "ui")
     logger.dbg(string.format(
@@ -5615,7 +5688,15 @@ end
 -- after scaling.
 local PRELOAD_START_DELAY_S = 0.35   -- let the current page's EPDC flush drain first
 local PRELOAD_TICK_S        = 0.05   -- gap between chunks
-local PRELOAD_CHUNK         = 4      -- covers warmed per tick
+local PRELOAD_CHUNK         = 4      -- covers warmed per tick (upper bound)
+-- Main-thread time budget per chunk. PRELOAD_CHUNK alone is a count budget:
+-- fine on fast hardware (4 jobs ≈ a few ms) but on a 1GHz e-ink device 4
+-- cover decodes can hold the main thread 200-600ms per 50ms tick, so taps
+-- land with visible lag for several seconds right after the boot paint --
+-- "shelf is shown but not responsive". The deadline caps each chunk to
+-- roughly one frame of work; slow devices degrade to 1 job per tick and the
+-- preload stretches out instead of starving gestures.
+local PRELOAD_CHUNK_BUDGET_S = 0.03
 -- Chip preload starts later than next-page preload so the initial _rebuild's
 -- paint and the first user gestures get a clear main-thread runway. It only
 -- ever runs once per widget instance (see _maybeStartChipPreload).
@@ -5657,6 +5738,8 @@ function BookshelfWidget:_cancelChipPreload()
         self._chip_preload_fn = nil
     end
     self._chip_preload_queue = nil
+    self._chip_preload_seen  = nil
+    self._chip_preload_keys  = nil
 end
 
 -- Cover-area dimensions of the shelf slots the LAST render actually produced,
@@ -5764,7 +5847,11 @@ end
 local function _warmChunk(jobs, chunk, counters)
     local ScaledCoverCache = require("lib/bookshelf_scaled_cover_cache")
     local done = 0
-    while done < chunk and #jobs > 0 do
+    -- Count cap AND time budget: the first job always runs, then we stop as
+    -- soon as the budget is spent, so one slow decode can't chain into a
+    -- multi-hundred-ms main-thread block (see PRELOAD_CHUNK_BUDGET_S).
+    local deadline = _gettime() + PRELOAD_CHUNK_BUDGET_S
+    while done < chunk and #jobs > 0 and (done == 0 or _gettime() < deadline) do
         local job = table.remove(jobs, 1)
         done = done + 1
         if job.folder_path then
@@ -5810,12 +5897,11 @@ local function _warmChunk(jobs, chunk, counters)
     return done
 end
 
--- Build the cover-job queue for one of two scopes:
---   "next"  -> next page of the current chip in the paged direction.
---              Cheap fetch (one chip, lazy_cover), small queue (~8 covers).
---   "chips" -> first page of each OTHER active chip. Heavier (each chip's
---              _fetchChipItems runs sequentially) -- runs as a one-shot
---              background task, NOT on every page turn.
+-- Build the cover-job queue for the next page of the current chip in the
+-- paged direction. Cheap fetch (one chip, lazy_cover), small queue (~8
+-- covers). (The chip warm-up no longer batches here: _chipPreloadStep pulls
+-- one chip's page per tick so a cold multi-chip fetch can't occupy a single
+-- tick.)
 function BookshelfWidget:_buildPhaseJobs(phase, seen)
     local jobs = {}
     local w, h = self:_currentSlotDims()
@@ -5826,16 +5912,6 @@ function BookshelfWidget:_buildPhaseJobs(phase, seen)
         local target = (self._cursor or 1) + (self._preload_dir or 1) * view
         if target >= 1 and (total == 0 or target <= total) then
             self:_collectPageCovers(jobs, seen, self.chip, target, w, h)
-        end
-    elseif phase == "chips" then
-        -- Top level only: _fetchChipItems short-circuits to the drilldown
-        -- branch when a tip is present, so borrowing self.chip mid-drilldown
-        -- would fetch the wrong list.
-        if #(self._drilldown_path or {}) ~= 0 then return jobs end
-        for _i, key in ipairs(self._active_chip_keys or {}) do
-            if key ~= self.chip then
-                self:_collectPageCovers(jobs, seen, key, 1, w, h)
-            end
         end
     end
     return jobs
@@ -5894,20 +5970,46 @@ function BookshelfWidget:_chipPreloadStep()
         return
     end
     if not self._chip_preload_queue then
+        -- First tick: snapshot the OTHER chips' keys. Each chip's first-page
+        -- fetch is pulled into the queue one-per-tick below -- a cold fetch
+        -- is a full shape build + sort (potentially hundreds of ms on
+        -- device), so batching all chips into this tick would occupy the
+        -- main thread for their sum right after the boot paint.
         self._chip_preload_counters = { decoded = 0, already = 0, failed = 0 }
-        local _qb_t0 = _gettime()
-        local ok, jobs = pcall(self._buildPhaseJobs, self, "chips", {})
-        self._chip_preload_queue = (ok and jobs) or {}
-        self._chip_preload_total = #self._chip_preload_queue
-        logger.dbg(string.format(
-            "[bookshelf perf] preload-chips: built in %.0fms size=%d",
-            (_gettime() - _qb_t0) * 1000, self._chip_preload_total))
+        self._chip_preload_queue = {}
+        self._chip_preload_seen = {}
+        self._chip_preload_keys = {}
+        self._chip_preload_total = 0
+        -- Top level only: _fetchChipItems short-circuits to the drilldown
+        -- branch when a tip is present, so borrowing self.chip mid-drilldown
+        -- would fetch the wrong list.
+        if #(self._drilldown_path or {}) == 0 then
+            for _i, key in ipairs(self._active_chip_keys or {}) do
+                if key ~= self.chip then
+                    self._chip_preload_keys[#self._chip_preload_keys + 1] = key
+                end
+            end
+        end
     end
     local q = self._chip_preload_queue
-    if q and #q > 0 then
+    local keys = self._chip_preload_keys
+    if #q == 0 and #keys > 0 then
+        -- Pull the next chip's first page into the queue (one fetch per tick).
+        local key = table.remove(keys, 1)
+        local w, h = self:_currentSlotDims()
+        if w then
+            local _qb_t0 = _gettime()
+            pcall(self._collectPageCovers, self, q, self._chip_preload_seen,
+                key, 1, w, h)
+            self._chip_preload_total = self._chip_preload_total + #q
+            logger.dbg(string.format(
+                "[bookshelf perf] preload-chips: fetched %s in %.0fms jobs=%d",
+                tostring(key), (_gettime() - _qb_t0) * 1000, #q))
+        end
+    elseif #q > 0 then
         _warmChunk(q, PRELOAD_CHUNK, self._chip_preload_counters)
     end
-    if not q or #q == 0 then
+    if #q == 0 and #keys == 0 then
         if self._chip_preload_total > 0 then
             local c = self._chip_preload_counters
             logger.dbg(string.format(
@@ -5919,6 +6021,8 @@ function BookshelfWidget:_chipPreloadStep()
         self._chip_preload_done = true
         self._chip_preload_fn = nil
         self._chip_preload_queue = nil
+        self._chip_preload_seen = nil
+        self._chip_preload_keys = nil
         return
     end
     if self._chip_preload_fn then
@@ -6703,8 +6807,13 @@ function BookshelfWidget:_buildBookMenuHeader(book, override_width, pill_specs)
     local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
     local size_bytes, mtime
     if ok_lfs and lfs and lfs.attributes then
-        size_bytes = lfs.attributes(book.filepath, "size")
-        mtime      = lfs.attributes(book.filepath, "modification")
+        -- One stat for both fields: attributes(path) returns the full
+        -- record, so asking twice with mode strings doubles the syscall.
+        local attr = lfs.attributes(book.filepath)
+        if attr then
+            size_bytes = attr.size
+            mtime      = attr.modification
+        end
     end
     local function _fmt_size(bytes)
         if not bytes or bytes <= 0 then return nil end
@@ -9062,7 +9171,9 @@ function BookshelfWidget:_openGroupMenu(group, kind)
         bw.chip            = new_id
         bw._cursor         = 1
         bw:_syncPageFromCursor()
-        BookshelfSettings.save("active_chip", new_id)
+        -- Deferred: _rebuild's _persistNavState owns the flush (and
+        -- TabModel.save above already flushed the tab change durably).
+        BookshelfSettings.saveDeferred("active_chip", new_id)
         Repo.invalidateBookCache("create-chip")
         bw:_rebuild()
         UIManager:setDirty(bw, "ui")
@@ -9373,18 +9484,6 @@ function BookshelfWidget:_drillBackTo(depth)
     self:_syncPageFromCursor()
     self:_rebuild()
     UIManager:setDirty(self, "ui")
-end
-
--- Convenience for the existing series-expand call sites.
--- These switch self.chip to the matching tab so the breadcrumb pill shows
--- the right kind ("AUTHORS > Stephen King") when entered from a long-press
--- on a different tab. When entered from the matching chip's own tap
--- callback the assignment is a no-op.
-local function _switchChip(self, key)
-    if self.chip ~= key then
-        self.chip = key
-        BookshelfSettings.save("active_chip", key)
-    end
 end
 
 -- _applyWithinGroupSort(group): when the current chip's tab has sort_priority

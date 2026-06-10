@@ -151,10 +151,33 @@ local _badgeSize = CoverProgress.badgeSize
 -- otherwise a throwaway probe at the base size measures it.
 local function _baseGlyphRenderedH(glyph_char, base_h, glyph_h, scaled_widget_h, face_name)
     if base_h == glyph_h then return scaled_widget_h end
-    local probe = CoverProgress.buildGlyphWidget(
-        glyph_char, base_h, Blitbuffer.COLOR_BLACK, face_name)
-    local h = probe:getSize().h
-    probe:free()
+    return CoverProgress.glyphRenderedH(glyph_char, base_h, face_name)
+end
+
+-- Memoized natural height of the page-count pill's reference text
+-- ("p" + hair space + digit, smallinfofont bold). Rendered height
+-- depends only on the face spec, so one probe per point size suffices;
+-- the user's Cover badge size setting feeds into the size argument via
+-- _badgeSize, which makes the key self-invalidating on scale changes.
+local _page_pill_h_memo = {}
+local function _pagePillRefH(size)
+    local h = _page_pill_h_memo[size]
+    if not h then
+        local TextWidget = require("ui/widget/textwidget")
+        local ref_face, ref_bold = BFont:getFace("smallinfofont", size, { bold = true })
+        local ref = TextWidget:new{
+            -- Match the page-count pill's actual text (hair space
+            -- between "p" and the digits) so any future width-aware
+            -- measurement here stays in sync. Only the height is
+            -- consumed today, but the parity guards against drift.
+            text = "p\xe2\x80\x8a1",
+            face = ref_face,
+            bold = ref_bold,
+        }
+        h = ref:getSize().h
+        ref:free()
+        _page_pill_h_memo[size] = h
+    end
     return h
 end
 
@@ -623,14 +646,11 @@ function SpineWidget:_renderShadowedCard(inner)
         local glyph_w = self:_glyphWidth(glyph_h)
         if glyph_w <= card_w * 0.4 then
             local halo_w = 1
-            -- Probe a bare glyph to measure the TRUE rendered height —
+            -- Measure the TRUE rendered height (memoized probe) -
             -- Font:getFace("symbols", N) paints at ~N*1.3-1.4 once
             -- ascent / descent / line-height padding are accounted for.
-            local probe = CoverProgress.buildGlyphWidget(
-                CoverProgress.GLYPH_BOOKMARK, glyph_h,
-                Blitbuffer.COLOR_BLACK)
-            local widget_h = probe:getSize().h
-            probe:free()
+            local widget_h = CoverProgress.glyphRenderedH(
+                CoverProgress.GLYPH_BOOKMARK, glyph_h)
             -- White centre on a dark halo, no drop shadow. The
             -- in-progress bookmark sits INSIDE the cover (no overhang),
             -- so it doesn't need the "raised above the surface" cue a
@@ -712,14 +732,11 @@ function SpineWidget:_renderShadowedCard(inner)
             -- taller than N. The halo+shadow group carries a synthetic
             -- dimen that understates the real paint footprint -- using
             -- outlined:getSize() here under-shoots the lift the same
-            -- way glyph_h does. Build a throwaway bare glyph to measure
-            -- the true height, then offset by -halo_w so the inner
-            -- glyph's centre lands on the in-progress glyph's centre.
-            local probe = CoverProgress.buildGlyphWidget(
-                CoverProgress.GLYPH_BOOKMARK_CHECK, glyph_h,
-                Blitbuffer.COLOR_BLACK)
-            local widget_h = probe:getSize().h
-            probe:free()
+            -- way glyph_h does. Measure the true height (memoized
+            -- probe), then offset by -halo_w so the inner glyph's
+            -- centre lands on the in-progress glyph's centre.
+            local widget_h = CoverProgress.glyphRenderedH(
+                CoverProgress.GLYPH_BOOKMARK_CHECK, glyph_h)
             -- Same halo + drop-shadow treatment as the favourites star
             -- (top-left). Halo keeps the glyph legible against the
             -- cover; the offset shadow gives a hint of depth.
@@ -764,24 +781,12 @@ function SpineWidget:_renderShadowedCard(inner)
         local TextWidget = require("ui/widget/textwidget")
         local colors    = CoverProgress.resolvedColors()
 
-        -- Reference widget measures the page-count pill's natural inner
-        -- height. Built with identical face spec to the page-count pill
-        -- (smallinfofont 12 bold) and freed immediately after measure.
+        -- Natural inner height of the page-count pill (memoized probe
+        -- built with identical face spec: smallinfofont 12 bold).
         -- Finished pill is a smaller square sitting alongside the
         -- page-count pill: ~half the outer height for a subtler badge
         -- now that the heavy v2.1 design got Reddit pushback.
-        local ref_face, ref_bold = BFont:getFace("smallinfofont", _badgeSize(12), { bold = true })
-        local ref = TextWidget:new{
-            -- Match the page-count pill's actual text (hair space
-            -- between "p" and the digits) so any future width-aware
-            -- measurement here stays in sync. Only the height is
-            -- consumed today, but the parity guards against drift.
-            text = "p\xe2\x80\x8a1",
-            face = ref_face,
-            bold = ref_bold,
-        }
-        local page_count_h = ref:getSize().h
-        ref:free()
+        local page_count_h = _pagePillRefH(_badgeSize(12))
         -- 0.65 of the page-count pill: a touch larger than the original
         -- 0.55 so the finished tickbox reads less "tiny" out of the box
         -- (issue #92). Still a subtle bordered pill, well short of the
@@ -1033,17 +1038,12 @@ function SpineWidget:_renderShadowedCard(inner)
                 -- beyond the halo.
                 local shadow_d = math.max(halo_w + 2,
                                           math.floor(glyph_h * 0.10))
-                -- Probe the bare star widget to measure the TRUE rendered
-                -- height (Font:getFace at size N renders at ~N*1.3-1.4 once
+                -- Measure the TRUE rendered height (memoized probe;
+                -- Font:getFace at size N renders at ~N*1.3-1.4 once
                 -- ascent / descent / line-height padding are accounted for;
                 -- the OverlapGroup's synthetic dimen under-reports that).
-                local probe = CoverProgress.buildGlyphWidget(
-                    fav_glyph,
-                    glyph_h,
-                    Blitbuffer.COLOR_BLACK,
-                    "symbols")
-                local widget_h = probe:getSize().h
-                probe:free()
+                local widget_h = CoverProgress.glyphRenderedH(
+                    fav_glyph, glyph_h, "symbols")
                 local outlined = CoverProgress.buildHaloShadowedGlyphWidget(
                     fav_glyph,
                     glyph_h,
