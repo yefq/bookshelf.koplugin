@@ -1827,7 +1827,7 @@ function BookshelfWidget:_rebuild()
     -- any rebuild is always a cold cover decode. From a freshly-settled page
     -- the user's likeliest next action is a forward swipe, so warm the next
     -- page now. No-op on the last page; _schedulePreload cancels any prior
-    -- preload, re-syncs cache capacity, and is Android-gated internally.
+    -- preload and re-syncs cache capacity.
     if (self._total_pages or 1) > (self.page or 1) then
         self:_schedulePreload(1)
     end
@@ -6047,10 +6047,6 @@ function BookshelfWidget:_maybeStartChipPreload()
     -- work; off = chips build lazily on first switch. This does NOT touch the
     -- predictive next/prev page preload, which stays on regardless.
     if not BookshelfSettings.nilOrTrue("prewarm_chip_cache") then return end
-    -- v2.3.1 defensive: the always-on background preload is implicated in an
-    -- Android crash (reported post-v2.3.0). Skip it on Android until the root
-    -- cause is pinned; e-ink devices keep the warm-up.
-    if Device:isAndroid() then return end
     if #(self._drilldown_path or {}) ~= 0 then return end
     self._chip_preload_fn = function() self:_chipPreloadStep() end
     UIManager:scheduleIn(CHIP_PRELOAD_DELAY_S, self._chip_preload_fn)
@@ -6125,11 +6121,6 @@ end
 
 function BookshelfWidget:_startFilePoll()
     if self._file_poll_fn then return end   -- already polling
-    -- v2.3.1 defensive: the periodic file-poll is the other new always-on
-    -- background task in v2.3.0; skip it on Android alongside the preload
-    -- until the crash is root-caused. Sideloaded-book auto-detect pauses on
-    -- Android only (manual swipe-down refresh still works).
-    if Device:isAndroid() then return end
     -- Establish baseline so the first tick doesn't false-positive on
     -- the very mtimes we'll be comparing against.
     self._home_dir_mtimes = _snapshotHomeDirs()
@@ -6199,7 +6190,6 @@ end
 function BookshelfWidget:_schedulePreload(direction)
     self:_cancelPreload()
     self:_applyCoverCacheBudget()
-    if Device:isAndroid() then return end  -- v2.3.1 crash defence; see _maybeStartChipPreload
     self._preload_dir = direction
     self._preload_fn = function() self:_preloadStep() end
     UIManager:scheduleIn(PRELOAD_START_DELAY_S, self._preload_fn)
