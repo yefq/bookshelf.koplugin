@@ -5,6 +5,7 @@
 local InputContainer  = require("ui/widget/container/inputcontainer")
 local BookshelfSettings = require("lib/bookshelf_settings_store")
 local Focus           = require("lib/bookshelf_focus")
+local TextSegments    = require("lib/bookshelf_text_segments")
 local FrameContainer  = require("ui/widget/container/framecontainer")
 local VerticalGroup   = require("ui/widget/verticalgroup")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
@@ -7045,7 +7046,10 @@ function BookshelfWidget:_buildBookMenuHeader(book, override_width, pill_specs, 
     -- bordered rounded rectangle, packed into rows that wrap to
     -- text_w. Pill text is rendered UPPERCASED (small-caps style) --
     -- KOReader's TextWidget has no small-caps font variant, so the
-    -- :upper() fallback is the convention. Padding is symmetric on
+    -- uppercase fallback is the convention. TextSegments.upper is
+    -- UTF-8-aware (Lua's :upper() leaves accented letters untouched,
+    -- so "videojáték" would render "VIDEOJáTéK" -- issue #130).
+    -- Padding is symmetric on
     -- both axes for a balanced look. Built only when the caller passes
     -- pill_specs -- the collection-manager call site for instance
     -- passes nil because it doesn't want nav-into-self affordances.
@@ -7065,7 +7069,7 @@ function BookshelfWidget:_buildBookMenuHeader(book, override_width, pill_specs, 
         -- front (the packing pass needs them to greedily wrap).
         local function _buildPill(label_text, on_tap_cb)
             local label_w = TextWidget_:new{
-                text = (label_text or ""):upper(),
+                text = TextSegments.upper(label_text or ""),
                 face = pill_face,
                 bold = pill_bold,
             }
@@ -7485,7 +7489,7 @@ function BookshelfWidget:_buildPillGroup(pill_specs, available_w, max_rows, base
 
     local function _buildPill(label_text, on_tap_cb)
         local label_w = TextWidget_:new{
-            text = (label_text or ""):upper(),
+            text = TextSegments.upper(label_text or ""),
             face = pill_face,
             bold = pill_bold,
         }
