@@ -184,8 +184,17 @@ function StartMenu:init()
 end
 
 function StartMenu:_panelWidthBounds()
-    local sw = Screen:getWidth()
-    return Screen:scaleBySize(180), math.floor(sw * 0.6)
+    local sw  = Screen:getWidth()
+    local pct = self._scale_pct or 100
+    -- Scale the minimum panel width with the start-menu font setting. A fixed
+    -- 180 left panels (and especially module-only flyouts, which fall back to
+    -- this floor) too narrow at large text: the analogue clock sized its face
+    -- to the cramped cell and its rim painted out of position. Both the root
+    -- and flyout panels go through here, so both widen together. Clamp to the
+    -- max so a very large font can't exceed the panel cap.
+    local max_w = math.floor(sw * 0.6)
+    local min_w = math.min(max_w, math.floor(Screen:scaleBySize(180) * pct / 100))
+    return min_w, max_w
 end
 
 -- Recomputes font-scaled row dimensions and faces from the current setting.
