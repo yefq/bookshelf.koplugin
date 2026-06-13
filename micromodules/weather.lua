@@ -110,6 +110,7 @@ local KEY_LON        = "micromodule_weather_lon"
 local KEY_DISPLAY    = "micromodule_weather_city_display"
 local KEY_DATA       = "micromodule_weather_data"
 local KEY_LAST_FETCH = "micromodule_weather_last_fetch"
+local KEY_UNIT       = "micromodule_weather_unit"  -- "celsius" | "fahrenheit"
 
 -- ─── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -152,9 +153,12 @@ local function fetchWeather(city, force, callback)
                 end
             end
 
-            -- 2. Fetch weather
+            -- 2. Fetch weather. Open-Meteo returns Celsius unless asked
+            -- otherwise; pass the user's unit through (default celsius).
+            local unit = Store.read(KEY_UNIT, "celsius")
             local w_url = "https://api.open-meteo.com/v1/forecast?latitude=" .. lat .. "&longitude=" .. lon
                 .. "&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto"
+                .. "&temperature_unit=" .. unit
             local w_data = httpGetJSON(w_url)
             if w_data and w_data.current and w_data.daily then
                 local parsed = {
@@ -223,6 +227,7 @@ local function showSettings(ctx)
     local dialog
 
     local city = Store.read(KEY_CITY, "")
+    local unit = Store.read(KEY_UNIT, "celsius")
 
     dialog = ButtonDialog:new{
         title       = _("Weather settings"),
@@ -269,6 +274,29 @@ local function showSettings(ctx)
                         }
                         UIManager:show(input_dlg)
                         input_dlg:onShowKeyboard()
+                    end,
+                },
+            },
+            {
+                {
+                    text = (unit == "fahrenheit") and _("Units: °F (tap for °C)")
+                                                   or _("Units: °C (tap for °F)"),
+                    callback = function()
+                        local nxt = (unit == "fahrenheit") and "celsius" or "fahrenheit"
+                        Store.save(KEY_UNIT, nxt)
+                        -- Cached temps are numbers in the OLD unit, so drop
+                        -- them and refetch in the new unit (or re-show
+                        -- settings if no city is set yet).
+                        Store.delete(KEY_DATA)
+                        Store.delete(KEY_LAST_FETCH)
+                        UIManager:close(dialog)
+                        if city ~= "" then
+                            fetchWeather(city, true, function()
+                                if ctx and ctx.menu and ctx.menu._reload then ctx.menu:_reload() end
+                            end)
+                        else
+                            showSettings(ctx)
+                        end
                     end,
                 },
             },
@@ -367,11 +395,14 @@ return {
             local face_suf = Fonts:getFace("cfont", sc(14))
 
             local t_val = math.floor(data.temp_current + 0.5)
+            -- Label the headline temp with the unit so it's unambiguous; the
+            -- min/max and forecast lines stay bare "°" for compactness.
+            local t_unit = Store.read(KEY_UNIT, "celsius") == "fahrenheit" and "F" or "C"
             local icon_tw = TextWidget:new{
                 text = curr_info.icon, face = face_big, bold = bold_big, fgcolor = BLACK,
             }
             local temp_tw = TextWidget:new{
-                text = " " .. tostring(t_val) .. "°", face = face_big, bold = bold_big, fgcolor = BLACK,
+                text = " " .. tostring(t_val) .. "°" .. t_unit, face = face_big, bold = bold_big, fgcolor = BLACK,
             }
 
             local sub_text = curr_info.desc
