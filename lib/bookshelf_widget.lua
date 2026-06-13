@@ -4,6 +4,7 @@
 --
 local InputContainer  = require("ui/widget/container/inputcontainer")
 local BookshelfSettings = require("lib/bookshelf_settings_store")
+local Focus           = require("lib/bookshelf_focus")
 local FrameContainer  = require("ui/widget/container/framecontainer")
 local VerticalGroup   = require("ui/widget/verticalgroup")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
@@ -8132,7 +8133,7 @@ function BookshelfWidget:_openHardcoverMenu(book)
             -- the in-place refresh path scopes its setDirty to the spine /
             -- hero rect, so repaint the dialog explicitly here.
             if dialog and dialog.reinit then
-                dialog:reinit()
+                Focus.reinit(dialog)
                 UIManager:setDirty(dialog, "ui")
             end
         end,
@@ -8147,7 +8148,7 @@ function BookshelfWidget:_openHardcoverMenu(book)
             -- See use_cover_button: reinit rebuilds the checkbox text but
             -- the scoped in-place refresh no longer repaints the dialog.
             if dialog and dialog.reinit then
-                dialog:reinit()
+                Focus.reinit(dialog)
                 UIManager:setDirty(dialog, "ui")
             end
         end,

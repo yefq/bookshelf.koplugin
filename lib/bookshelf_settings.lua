@@ -11,6 +11,7 @@ local SpinWidget   = require("ui/widget/spinwidget")
 local UIManager    = require("ui/uimanager")
 local T            = require("ffi/util").template
 local _            = require("lib/bookshelf_i18n").gettext
+local Focus        = require("lib/bookshelf_focus")
 
 local BookshelfSettings = require("lib/bookshelf_settings_store")
 local BFont        = require("lib/bookshelf_fonts")
@@ -1285,7 +1286,7 @@ function Settings:_pickCoverBadgeFontScale(touchmenu_instance)
     local function nudge(delta)
         setValue(getValue() + delta)
         rebuild()
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
     local function close() UIManager:close(dialog); restoreMenu() end
     local function revert() setValue(original); rebuild() end
@@ -1313,7 +1314,7 @@ function Settings:_pickCoverBadgeFontScale(touchmenu_instance)
             {
                 { text = _("Cancel"), callback = function() revert(); close() end },
                 { text = _("Default"),
-                  callback = function() setValue(100); rebuild(); dialog:reinit() end },
+                  callback = function() setValue(100); rebuild(); Focus.reinit(dialog) end },
                 { text = _("Apply"), is_enter_default = true, callback = close },
             },
         },
@@ -2019,7 +2020,7 @@ function Settings:_pickExpandedShelfFontScale(touchmenu_instance)
     local function nudge(delta)
         setValue(getValue() + delta)
         rebuild()
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
     local function close() UIManager:close(dialog); restoreMenu() end
     local function revert() setValue(original); rebuild() end
@@ -2039,7 +2040,7 @@ function Settings:_pickExpandedShelfFontScale(touchmenu_instance)
             {
                 { text = _("Cancel"), callback = function() revert(); close() end },
                 { text = _("Default"),
-                  callback = function() setValue(100); rebuild(); dialog:reinit() end },
+                  callback = function() setValue(100); rebuild(); Focus.reinit(dialog) end },
                 { text = _("Apply"), is_enter_default = true, callback = close },
             },
         },
@@ -2400,7 +2401,7 @@ function Settings:showNudgeDialog(title, value, min_val, max_val, default_val, u
     local function update(delta)
         value = math.max(min_val, math.min(max_val, value + delta))
         on_change(value)
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
 
     local nudge_buttons = {}
@@ -2443,7 +2444,7 @@ function Settings:showNudgeDialog(title, value, min_val, max_val, default_val, u
                         UIManager:close(dialog)
                         if on_close then on_close() end
                     else
-                        value = default_val; on_change(value); dialog:reinit()
+                        value = default_val; on_change(value); Focus.reinit(dialog)
                     end
                 end },
             }
@@ -2532,12 +2533,12 @@ function Settings:_openLayoutEditor(touchmenu_instance)
     local function cycleHero()
         BookshelfSettings.save("hero_size", cycle(hero_order, readHero()))
         rebuild()
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
     local function cycleBookshelf()
         BookshelfSettings.save("bookshelf_size", cycle(bookshelf_order, readBookshelf()))
         rebuild()
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
     local function close()
         UIManager:close(dialog)
@@ -2614,7 +2615,7 @@ function Settings:_pickFontScale(touchmenu_instance)
     local function nudge(delta)
         setValue(getValue() + delta)
         rebuild()
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
     local function close()
         UIManager:close(dialog)
@@ -2640,7 +2641,7 @@ function Settings:_pickFontScale(touchmenu_instance)
             {
                 { text = _("Cancel"), callback = function() revert(); close() end },
                 { text = _("Default"),
-                  callback = function() setValue(100); rebuild(); dialog:reinit() end },
+                  callback = function() setValue(100); rebuild(); Focus.reinit(dialog) end },
                 { text = _("Apply"), is_enter_default = true, callback = close },
             },
         },
@@ -2680,7 +2681,7 @@ function Settings:_pickChipFontScale(touchmenu_instance)
     local function nudge(delta)
         setValue(getValue() + delta)
         rebuild()
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
     local function close() UIManager:close(dialog); restoreMenu() end
     local function revert()
@@ -2703,7 +2704,7 @@ function Settings:_pickChipFontScale(touchmenu_instance)
             {
                 { text = _("Cancel"), callback = function() revert(); close() end },
                 { text = _("Default"),
-                  callback = function() setValue(100); rebuild(); dialog:reinit() end },
+                  callback = function() setValue(100); rebuild(); Focus.reinit(dialog) end },
                 { text = _("Apply"), is_enter_default = true, callback = close },
             },
         },
@@ -2744,7 +2745,7 @@ function Settings:_pickStackLabelFontScale(touchmenu_instance)
     local function nudge(delta)
         setValue(getValue() + delta)
         rebuild()
-        dialog:reinit()
+        Focus.reinit(dialog)
     end
     local function close() UIManager:close(dialog); restoreMenu() end
     local function revert()
@@ -2767,7 +2768,7 @@ function Settings:_pickStackLabelFontScale(touchmenu_instance)
             {
                 { text = _("Cancel"), callback = function() revert(); close() end },
                 { text = _("Default"),
-                  callback = function() setValue(100); rebuild(); dialog:reinit() end },
+                  callback = function() setValue(100); rebuild(); Focus.reinit(dialog) end },
                 { text = _("Apply"), is_enter_default = true, callback = close },
             },
         },
@@ -2804,7 +2805,7 @@ function Settings:_pickStartMenuFontScale(touchmenu_instance)
 
     local dialog
     local function applyReinit()
-        dialog:reinit()
+        Focus.reinit(dialog)
         if dialog.movable then dialog.movable.ges_events = {} end
         UIManager:setDirty(dialog, "ui")
     end
