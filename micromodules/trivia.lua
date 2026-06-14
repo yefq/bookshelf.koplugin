@@ -627,13 +627,13 @@ return {
 
         if _view_mode == "question" then
             group[#group + 1] = TextWidget:new{
-                text = _("Tap to reveal answer \xE2\x96\xB6"),
+                text = _("Tap to reveal answer \xE2\x86\x92"),
                 face = Fonts:getFace("cfont", sc(12), {italic = true}),
                 fgcolor = GRAY, max_width = mw,
             }
         else
             group[#group + 1] = TextWidget:new{
-                text = _("Tap for next question \xE2\x96\xB6"),
+                text = _("Tap for next question \xE2\x86\x92"),
                 face = Fonts:getFace("cfont", sc(12), {italic = true}),
                 fgcolor = GRAY, max_width = mw,
             }
