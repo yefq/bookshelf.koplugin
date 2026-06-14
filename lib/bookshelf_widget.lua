@@ -1272,8 +1272,7 @@ function BookshelfWidget:_rebuild()
             -- coalesced flush; a sync save here added a ~140ms file write
             -- to every chip tap.
             BookshelfSettings.saveDeferred("active_chip", key)
-            self:_rebuild()
-            UIManager:setDirty(self, "ui")
+            self:_rebuildRefreshBelowHero()
         end,
         on_breadcrumb = function(depth)
             -- depth -1 = back pill (search mode only): exit search
@@ -5457,6 +5456,31 @@ end
 -- _setActiveChip(key) — switch tabs as if the user tapped a chip.
 -- Mirrors the on_change closure in _rebuild so swipe-cycling and tap
 -- both produce identical state transitions.
+-- Rebuild, then refresh ONLY below the hero so the unchanged hero cover isn't
+-- repainted -- repainting it flashes on panels with HW dithering, on chip
+-- switch / page nav (issue #124). Both the chip-tap closure and _setActiveChip
+-- (swipe) route through here so the scoping can't drift between them. Prefers
+-- the hero's live painted dimen; falls back to the stashed hero geometry, then
+-- a full refresh.
+function BookshelfWidget:_rebuildRefreshBelowHero()
+    local prev_hero  = self._hero_parent and self._hero_parent[1]
+    local hero_dimen = prev_hero and prev_hero.dimen
+    self:_rebuild()
+    local below_y
+    if hero_dimen and hero_dimen.y and hero_dimen.h then
+        below_y = hero_dimen.y + hero_dimen.h
+    elseif self._hero_dims and self._hero_dims.hero_h then
+        below_y = (self._hero_dims.PAD or 0) + self._hero_dims.hero_h
+    end
+    if below_y then
+        UIManager:setDirty(self, function()
+            return "ui", Geom:new{ x = 0, y = below_y, w = self.width, h = self.height - below_y }
+        end)
+    else
+        UIManager:setDirty(self, "ui")
+    end
+end
+
 function BookshelfWidget:_setActiveChip(key)
     if not key or key == self.chip then return end
     -- Diag: wrap the chip-switch flow so the log shows the elapsed time
@@ -5491,22 +5515,7 @@ function BookshelfWidget:_setActiveChip(key)
     -- refresh to the chip strip + shelves + footer below it; the hero region
     -- is left untouched. Falls back to a full refresh if the hero hasn't
     -- painted yet (no dimen).
-    local prev_hero  = self._hero_parent and self._hero_parent[1]
-    local hero_dimen = prev_hero and prev_hero.dimen
-    self:_rebuild()
-    if hero_dimen and hero_dimen.h then
-        local below_y = hero_dimen.y + hero_dimen.h
-        UIManager:setDirty(self, function()
-            return "ui", Geom:new{
-                x = 0,
-                y = below_y,
-                w = self.width,
-                h = self.height - below_y,
-            }
-        end)
-    else
-        UIManager:setDirty(self, "ui")
-    end
+    self:_rebuildRefreshBelowHero()
     logger.dbg(string.format(
         "[bookshelf perf] chip-switch: from=%s to=%s flash=%.0fms rebuild=%.0fms TOTAL=%.0fms",
         _diag_from, key,
