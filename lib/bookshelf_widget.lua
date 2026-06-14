@@ -3915,7 +3915,20 @@ function BookshelfWidget:_swapShelvesInPlace()
     logger.dbg(string.format("[bookshelf perf] _swapShelves: TOTAL=%.0fms page=%d/%d items=%d chip=%s",
         (_gettime() - _perf_t0) * 1000, self.page, self._total_pages or 0,
         self._total_items or 0, self.chip))
-    UIManager:setDirty(self, "ui")
+    -- Scope the refresh to the shelf area (top of row 1 down to the screen
+    -- bottom, covering the rows + pagination footer). The swap only changed
+    -- the shelves and footer; the hero and chip strip above are untouched, so
+    -- a whole-widget "ui" refresh needlessly repaints the hero cover -- which
+    -- flashes visibly on slower e-ink panels on book-return / page-turn
+    -- (issue #124). Fall back to a full refresh if the old rows carry no
+    -- painted dimen to anchor the region.
+    local shelf_top = old_rows[1] and old_rows[1].dimen and old_rows[1].dimen.y
+    if shelf_top then
+        UIManager:setDirty(self, "ui", Geom:new{
+            x = 0, y = shelf_top, w = self.width, h = self.height - shelf_top })
+    else
+        UIManager:setDirty(self, "ui")
+    end
     -- Pagination via _swapShelvesInPlace bypasses _rebuild's persist hook;
     -- repeat the save here so a forward/back swipe is enough to land back
     -- on the right page after a book read or KOReader restart.
