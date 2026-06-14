@@ -146,7 +146,8 @@ return {
 
         local mw = math.max(50, width)
         local function sc(n) return math.max(1, math.floor(n * (scale_pct or 100) / 100 + 0.5)) end
-        local BLACK, GRAY = Blitbuffer.COLOR_BLACK, Blitbuffer.COLOR_DARK_GRAY
+        local SM = require("lib/bookshelf_start_menu_modules")
+        local BLACK, GRAY = SM.COLOR_PRIMARY, SM.COLOR_MUTED
 
         if is_preview then
             local VG = require("ui/widget/verticalgroup")
