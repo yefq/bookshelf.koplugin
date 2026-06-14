@@ -4160,10 +4160,21 @@ function BookshelfWidget:softRefresh()
         UIManager:setDirty(self, "ui")
         return
     end
-    -- Two-shelf gate: _swapShelvesInPlace's own fast-path bailout. Falling
-    -- back to _rebuild here is cheaper than triggering it from the deferred
-    -- callback after we've already painted a stale tree.
-    if not has_live_tree or self:_nShelves() ~= 2 then
+    -- Row-count gate: the in-place swap helpers (_swapShelvesInPlace and the
+    -- hero right-column swap below) reuse the live tree's stashed shelf-row
+    -- indices, so they're valid only while the current _nShelves() still
+    -- matches the count the tree was built with. A mismatch means the layout
+    -- changed (rotation, expand/collapse, cover-size) and the indices are
+    -- stale -- fall back to a full _rebuild.
+    --
+    -- This was previously gated on "== 2", an outdated proxy for "collapsed,
+    -- hero visible" from before the cover-size / hero-size settings existed.
+    -- Those settings now let a hero-visible layout have 1 or 3 rows, which
+    -- were needlessly forced down the heavy whole-screen rebuild + broad
+    -- refresh on every book return (issue #124). Comparing against the
+    -- stashed count instead lets any unchanged row count take the scoped,
+    -- flash-free path, mirroring _swapShelvesInPlace's own guard.
+    if not has_live_tree or (self._shelf_dims.n_shelves or 2) ~= self:_nShelves() then
         self:_rebuild()
         if self._startStatusTimer then self:_startStatusTimer() end
         UIManager:setDirty(self, "ui")
@@ -8000,7 +8011,7 @@ function BookshelfWidget:_refreshHardcoverEnrichmentView(reason, filepath)
                          or reason == "hardcover-use-description")
     if toggle_only and filepath
             and self._inner_vgroup and self._shelf_dims
-            and self:_nShelves() == 2 then
+            and (self._shelf_dims.n_shelves or 2) == self:_nShelves() then
         local spine_done = self:_refreshSpineInPlace(filepath)
         local preview_fp = self._preview_book and self._preview_book.filepath
         local hero_done = false
