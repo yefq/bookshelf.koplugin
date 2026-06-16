@@ -8456,7 +8456,7 @@ function BookshelfWidget:_openBookMenu(item)
     --   5. Select / Cancel / Apply
 
     local show_info_button = {
-        text = "Show info",
+        text = _("Show info"),
         callback = closing(function()
             -- filemanagerbookinfo:show does lfs.attributes(file).size with
             -- no nil guard -- passing a missing filepath panics LuaJIT
