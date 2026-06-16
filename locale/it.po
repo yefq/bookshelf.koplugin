@@ -3,7 +3,7 @@
 msgid ""
 msgstr ""
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-06-16 21:26+0100\n"
+"POT-Creation-Date: 2026-06-16 22:13+0100\n"
 "Language: it\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -1268,7 +1268,7 @@ msgstr "Cerca"
 msgid "Page %1 of %2"
 msgstr "Pagina %1 di %2"
 
-#: lib/bookshelf_menu_host.lua:135
+#: lib/bookshelf_menu_host.lua:135 lib/bookshelf_widget.lua:1216
 msgid "Back"
 msgstr "Indietro"
 
@@ -2957,6 +2957,10 @@ msgstr "Impossibile recuperare l'ultima versione."
 msgid "Latest release has no downloadable zip."
 msgstr "L'ultima versione non ha un file zip scaricabile."
 
+#: lib/bookshelf_widget.lua:1177
+msgid "Search results"
+msgstr "Risultati della ricerca"
+
 #: lib/bookshelf_widget.lua:1406
 #, lua-format
 msgid "No matches for \"%s\""
@@ -3232,6 +3236,10 @@ msgstr "Collegato: %1"
 #: lib/bookshelf_widget.lua:8303
 msgid "Not linked to Hardcover"
 msgstr "Non collegato a Hardcover"
+
+#: lib/bookshelf_widget.lua:8459
+msgid "Show info"
+msgstr "Mostra info"
 
 #: lib/bookshelf_widget.lua:8654
 msgid "Metadata refresh queued"

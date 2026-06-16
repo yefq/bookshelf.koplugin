@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-06-16 21:26+0100\n"
+"POT-Creation-Date: 2026-06-16 22:13+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1260,7 +1260,7 @@ msgstr ""
 msgid "Page %1 of %2"
 msgstr ""
 
-#: lib/bookshelf_menu_host.lua:135
+#: lib/bookshelf_menu_host.lua:135 lib/bookshelf_widget.lua:1216
 msgid "Back"
 msgstr ""
 
@@ -2768,6 +2768,10 @@ msgstr ""
 msgid "Latest release has no downloadable zip."
 msgstr ""
 
+#: lib/bookshelf_widget.lua:1177
+msgid "Search results"
+msgstr ""
+
 #: lib/bookshelf_widget.lua:1406
 #, lua-format
 msgid "No matches for \"%s\""
@@ -3025,6 +3029,10 @@ msgstr ""
 
 #: lib/bookshelf_widget.lua:8303
 msgid "Not linked to Hardcover"
+msgstr ""
+
+#: lib/bookshelf_widget.lua:8459
+msgid "Show info"
 msgstr ""
 
 #: lib/bookshelf_widget.lua:8654

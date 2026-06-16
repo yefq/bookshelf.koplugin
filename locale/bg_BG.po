@@ -4,7 +4,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: bookends\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-06-16 21:26+0100\n"
+"POT-Creation-Date: 2026-06-16 22:13+0100\n"
 "PO-Revision-Date: 2026-04-21 14:00+0000\n"
 "Language-Team: Bulgarian\n"
 "Language: bg_BG\n"
@@ -1272,7 +1272,7 @@ msgstr "Търсене"
 msgid "Page %1 of %2"
 msgstr "Страница %1 от %2"
 
-#: lib/bookshelf_menu_host.lua:135
+#: lib/bookshelf_menu_host.lua:135 lib/bookshelf_widget.lua:1216
 msgid "Back"
 msgstr "Назад"
 
@@ -2952,6 +2952,10 @@ msgstr "Последната версия не можа да бъде изтег
 msgid "Latest release has no downloadable zip."
 msgstr "Последната версия няма zip файл за изтегляне."
 
+#: lib/bookshelf_widget.lua:1177
+msgid "Search results"
+msgstr "Резултати от търсенето"
+
 #: lib/bookshelf_widget.lua:1406
 #, lua-format
 msgid "No matches for \"%s\""
@@ -3225,6 +3229,10 @@ msgstr "Свързана: %1"
 #: lib/bookshelf_widget.lua:8303
 msgid "Not linked to Hardcover"
 msgstr "Не е свързана с Hardcover"
+
+#: lib/bookshelf_widget.lua:8459
+msgid "Show info"
+msgstr "Показване на информация"
 
 #: lib/bookshelf_widget.lua:8654
 msgid "Metadata refresh queued"
