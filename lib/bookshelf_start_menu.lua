@@ -123,18 +123,14 @@ function StartMenu:init()
     -- per open (init runs once per StartMenu instance; _reload does not
     -- re-init). Modules key per-open caches on it — see the README.
     pcall(Modules.bumpGeneration)
-    -- Crash recovery (issue #163), two layers:
-    --  * Render-phase: a module whose render/getSize crashed left an in-flight
-    --    marker on disk; beginOpen promotes it to the blocklist (returns its
-    --    key) so _buildModuleRow skips it and shows a removable fallback.
-    --  * Paint-phase / unpinnable: if the LAST open armed but never painted
-    --    (a segfault in the paint pass, or a crash outside any module render),
-    --    we can't attribute it to one module - so open in SAFE MODE with every
-    --    module suppressed, guaranteeing the user gets in to remove the culprit.
-    -- openCrashed must be read BEFORE armOpen re-arms it for this open.
-    local ok_b, pinned = pcall(Breaker.beginOpen, Store)
+    -- Crash recovery (issue #163): if the LAST open armed but never painted
+    -- (a paint-pass segfault, or a render hard-crash safeText didn't prevent),
+    -- the marker is still on disk - open in SAFE MODE with every module
+    -- suppressed so the user can still get in and remove the culprit. Prevention
+    -- is safeText; this is just the recovery net. openCrashed must be read
+    -- BEFORE armOpen re-arms it for this open.
     local ok_o, crashed = pcall(Breaker.openCrashed, Store)
-    self._safe_mode = (ok_o and crashed and not (ok_b and pinned)) or false
+    self._safe_mode = (ok_o and crashed) or false
     pcall(Breaker.armOpen, Store)
     self.dimen = Geom:new{ x = 0, y = 0,
         w = Screen:getWidth(), h = Screen:getHeight() }
@@ -414,18 +410,14 @@ function StartMenu:_buildModuleRow(entry, w, focused, in_flyout)
     local card_pad    = self._pad
     local inner_w     = inner_w_frame - 2 * card_margin - 2 * card_pad
     -- In safe mode every module is suppressed (a previous open crashed before
-    -- painting and we couldn't pin it); otherwise just the individually-blocked
-    -- ones. Either way the row renders as a removable, tappable fallback.
-    local blocked = self._safe_mode or Breaker.isBlocked(Store, entry.module)
+    -- painting); the row renders as a removable, tappable fallback instead.
+    local blocked = self._safe_mode
     local inner, errored
     if def and not blocked then
-        -- Force getSize() INSIDE the breaker's armed window: TextBoxWidget
-        -- shaping (the likely segfault site) happens during measurement, not
-        -- the later blit, so arming across getSize pins the culprit and lets
-        -- the marker survive a hard crash. A catchable Lua error here just
-        -- falls back this open (the module is retried next open); only an
-        -- uncatchable crash leaves the marker set and blocks the module.
-        local ok, widget = Breaker.guard(Store, entry.module, function()
+        -- Render under pcall so a Lua error degrades to an "(error)" row rather
+        -- than taking down the build. Force getSize() inside the guard so any
+        -- layout/shaping error is caught here too. No disk writes on this path.
+        local ok, widget = Breaker.guard(function()
             local wgt = def.render(inner_w, self._scale_pct or 100)
             if wgt then wgt:getSize() end
             return wgt
@@ -1007,14 +999,6 @@ function StartMenu:_activate(entry)
             self._safe_mode = false
             self._open_painted = false
             pcall(Breaker.armOpen, Store)
-            self:_reload()
-            return
-        end
-        -- A module auto-disabled after it crashed the menu (issue #163) taps
-        -- to retry: clear the block and reload so it renders again, rather
-        -- than re-running the on_tap that may have triggered the crash.
-        if Breaker.isBlocked(Store, entry.module) then
-            Breaker.retry(Store, entry.module)
             self:_reload()
             return
         end
