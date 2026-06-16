@@ -34,6 +34,12 @@ local M = {}
 M.INFLIGHT_KEY = "start_menu_module_inflight"
 -- Set of module keys disabled after a hard crash: { [key] = true }.
 M.BLOCKED_KEY = "start_menu_modules_blocked"
+-- "An open is in progress and hasn't completed a paint yet." Armed before the
+-- menu is shown, cleared once its first paint succeeds. If still set at the
+-- next open, the previous open never painted (a paint-pass segfault, or a
+-- crash outside any module's render that the per-module guard can't pin) - so
+-- the menu opens in safe mode with all modules suppressed.
+M.OPEN_KEY = "start_menu_open_inflight"
 
 function M.inflightKey(store)
     return store.read(M.INFLIGHT_KEY)
@@ -50,14 +56,34 @@ end
 
 -- Called once at the start of each menu build. If a key is still in-flight, the
 -- previous render of that key never disarmed - i.e. it crashed the app - so
--- promote it to the persistent blocklist and clear the stuck marker.
+-- promote it to the persistent blocklist and clear the stuck marker. Returns
+-- the promoted key (so the caller knows the crash was pinned to a module), or
+-- nil if nothing was in-flight.
 function M.beginOpen(store)
     local stuck = store.read(M.INFLIGHT_KEY)
-    if stuck == nil then return end
+    if stuck == nil then return nil end
     local set = blockedSet(store)
     set[stuck] = true
     store.save(M.BLOCKED_KEY, set)
     store.delete(M.INFLIGHT_KEY)
+    return stuck
+end
+
+-- Mark that an open is in progress (armed before the menu is shown). Durable:
+-- the real store flushes, so it survives a crash before the first paint.
+function M.armOpen(store)
+    store.save(M.OPEN_KEY, true)
+end
+
+-- Clear the open marker once the first paint has succeeded.
+function M.endOpen(store)
+    store.delete(M.OPEN_KEY)
+end
+
+-- True if an open armed but never completed a paint (it crashed). Read at the
+-- start of the next open, BEFORE armOpen re-arms it.
+function M.openCrashed(store)
+    return store.read(M.OPEN_KEY) == true
 end
 
 -- Render a module under the breaker. Returns (true, result) on success, or

@@ -114,4 +114,41 @@ t.test("beginOpen is a no-op when nothing was in-flight", function()
         "a cleanly-disarmed module must never be blocked on a later open")
 end)
 
+t.test("beginOpen returns the key it promotes, or nil", function()
+    local store = fakeStore()
+    assert(Breaker.beginOpen(store) == nil,
+        "a clean open promotes nothing")
+    store.save(Breaker.INFLIGHT_KEY, "trivia")
+    assert(Breaker.beginOpen(store) == "trivia",
+        "beginOpen must return the render-phase culprit it blocked")
+end)
+
+-- Open-level breaker: catches crashes the per-module guard can't pin - a paint
+-- pass segfault (render+getSize already disarmed) or a crash outside any module
+-- render. armOpen marks "an open is in progress"; endOpen clears it once the
+-- first paint succeeds. If the marker is still set at the next open, that open
+-- never painted - so the menu opens in safe mode (all modules suppressed).
+t.test("a clean open arms then ends; nothing looks crashed", function()
+    local store = fakeStore()
+    Breaker.armOpen(store)
+    assert(Breaker.openCrashed(store) == true,
+        "while armed and not ended, an open is considered in-flight")
+    Breaker.endOpen(store)
+    assert(Breaker.openCrashed(store) == false,
+        "a paint that completed clears the open marker")
+end)
+
+t.test("an open that armed but never ended is detected as crashed", function()
+    local store = fakeStore()
+    Breaker.armOpen(store)
+    -- ...paint segfaults before endOpen runs. Next open:
+    assert(Breaker.openCrashed(store) == true,
+        "an open with no completing paint must be detectable on the next open")
+end)
+
+t.test("openCrashed is false on a fresh store", function()
+    local store = fakeStore()
+    assert(Breaker.openCrashed(store) == false)
+end)
+
 t.done()
