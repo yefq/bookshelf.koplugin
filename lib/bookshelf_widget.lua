@@ -5899,6 +5899,17 @@ function BookshelfWidget:paintTo(bb, x, y)
     local top = stack and stack[#stack] and stack[#stack].widget
     if top and top.invisible and top.text then return end
 
+    -- Issue #172: same flash, NON-seamless path. Opening a book from inside
+    -- the reader (History / Collections / Book shortcuts / prev-next) tears the
+    -- old ReaderUI down and shows a *visible* "Opening file…" InfoMessage with a
+    -- forced repaint before the new document loads. By then the old reader is
+    -- gone and the parked shelf is the only window left, so that repaint paints
+    -- us full-screen for ~1s. The guard above only catches the seamless
+    -- (invisible) variant; this flag is set by Bookshelf:onCloseDocument when
+    -- ReaderUI is tearing down to open another book, and cleared once the new
+    -- reader is ready (or whenever the shelf is intentionally shown again).
+    if self._suppress_transition_paint then return end
+
     local sw = Screen:getWidth()
     local sh = Screen:getHeight()
     if sw ~= self.width or sh ~= self.height then
