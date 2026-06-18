@@ -4749,6 +4749,9 @@ function BookshelfWidget:_previewBook(book, tap_t)
         self._hero_mode    = "current"
         self._expanded     = false
         self._preview_book = Repo.buildBook(book.filepath) or book
+        -- #174: re-roll the per-book %quote token so each selection shows a
+        -- different random highlight from the newly-selected book.
+        pcall(function() require("lib/bookshelf_quotes").rerollBook() end)
         -- Hero (grid -> book) + chip strip change; scope to that band.
         self:_rebuildRefreshHeroAndChips()
         -- The rebuilt tree paints the tapped cover with its selection ring;
@@ -4797,6 +4800,8 @@ function BookshelfWidget:_previewBook(book, tap_t)
     -- bar and token lines, so upgrade to the full Book record here. Single-
     -- book DocSettings read on each preview tap is fine.
     self._preview_book = Repo.buildBook(book.filepath) or book
+    -- #174: re-roll the per-book %quote token on each selection.
+    pcall(function() require("lib/bookshelf_quotes").rerollBook() end)
     -- Stash the freshly-built record so the _swapHeroInPlace ->
     -- _buildHero call below doesn't pay DocSettings:open() a second time
     -- for the same filepath. _buildHero consumes destructively. Skipped

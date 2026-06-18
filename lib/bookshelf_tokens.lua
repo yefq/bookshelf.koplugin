@@ -71,6 +71,8 @@ Tokens.CATALOGUE = {
     { category = "Book",     token = "%filename",         description = _("File name") },
     { category = "Book",     token = "%format",           description = _("Format (EPUB/PDF/…)") },
     { category = "Book",     token = "%description",      description = _("Book blurb (HTML stripped)") },
+    { category = "Book",     token = "%quote",            description = _("A random highlight from this book") },
+    { category = "Book",     token = "%quote_source",     description = _("The book and author for %quote") },
     { category = "Book",     token = "%lang",             description = _("Language") },
     { category = "Progress", token = "%book_pct",         description = _("Percent read") },
     { category = "Progress", token = "%book_pct_left",    description = _("Percent left") },
@@ -355,6 +357,33 @@ end
 Tokens.cleanDescription = cleanDescription      -- exported for tests / ad-hoc use
 Tokens.expanders.description = function(book)
     return book and cleanDescription(book.description) or ""
+end
+
+-- %quote / %quote_source: a RANDOM highlight from the CURRENTLY SELECTED book
+-- (issue #174), so a hero / book-detail region can show one of your own
+-- highlights in place of the description. Re-rolls each time the book is
+-- selected (the widget bumps the per-book nonce); stable across repaints within
+-- one selection. Empty when the book has no highlights or no file.
+Tokens.expanders.quote = function(book)
+    if not (book and book.filepath) then return "" end
+    local ok, Quotes = pcall(require, "lib/bookshelf_quotes")
+    if not ok then return "" end
+    local q = Quotes.forBook(book.filepath)
+    -- Curly-quoted so it reads as a quotation wherever it's dropped in (users
+    -- editing a hero template can't easily type the smart quotes themselves).
+    return (q and q.text) and ("\xE2\x80\x9C" .. q.text .. "\xE2\x80\x9D") or ""
+end
+Tokens.expanders.quote_source = function(book)
+    if not (book and book.filepath) then return "" end
+    local ok, Quotes = pcall(require, "lib/bookshelf_quotes")
+    if not ok then return "" end
+    local q = Quotes.forBook(book.filepath)
+    if not q then return "" end
+    local attribution = q.title or ""
+    if q.author and q.author ~= "" then
+        attribution = attribution ~= "" and (attribution .. ", " .. q.author) or q.author
+    end
+    return attribution
 end
 
 -- HTML escape for text we inject into the reviews-modal markup (book title,
