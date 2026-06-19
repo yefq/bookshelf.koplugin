@@ -78,6 +78,75 @@ function M.rememberedButtonRect()
     return _remembered
 end
 
+-- Grid (micro-module) button glyph metrics, mirroring _buildMicroModuleIcon:
+-- a 2x2 of separate outlined boxes, the ink box W x H (H is the bar span x1.25)
+-- centred in the art box.
+function M.gridMetrics()
+    local art  = Screen:scaleBySize(32)
+    local t    = math.max(1, math.floor(art / 14))
+    local span0 = math.floor(art * 0.62)
+    local bgap = math.max(1, math.floor((span0 - 3 * t) / 2))
+    local span = 3 * t + 2 * bgap
+    local W, H = art, math.floor(span * 1.25)
+    local gap  = math.max(2, 2 * t)
+    local cw   = math.floor((W - gap) / 2)
+    local ch   = math.floor((H - gap) / 2)
+    return { art = art, t = t, W = W, H = H, gap = gap, cw = cw, ch = ch }
+end
+
+-- Paint the 2x2 grid glyph: left edge at x, top of the H ink box at oy.
+function M.paintGrid(bb, x, oy)
+    local Blitbuffer = require("ffi/blitbuffer")
+    local g = M.gridMetrics()
+    local function box(rx, ry)
+        bb:paintRect(rx, ry, g.cw, g.t, Blitbuffer.COLOR_BLACK)
+        bb:paintRect(rx, ry + g.ch - g.t, g.cw, g.t, Blitbuffer.COLOR_BLACK)
+        bb:paintRect(rx, ry, g.t, g.ch, Blitbuffer.COLOR_BLACK)
+        bb:paintRect(rx + g.cw - g.t, ry, g.t, g.ch, Blitbuffer.COLOR_BLACK)
+    end
+    for r = 0, 1 do
+        for c = 0, 1 do
+            box(x + c * (g.cw + g.gap), oy + r * (g.ch + g.gap))
+        end
+    end
+end
+
+-- Real painted rect of the footer micro-module (grid) button, remembered like
+-- the start-menu button so the reader grid launcher matches it exactly.
+local _remembered_grid
+function M.rememberGridRect(d)
+    if d and d.x and d.w and d.w > 0 then
+        _remembered_grid = { x = d.x, y = d.y, w = d.w, h = d.h }
+    end
+end
+function M.rememberedGridRect()
+    return _remembered_grid
+end
+
+-- Left x + top y for painting the grid glyph, from the remembered frame when
+-- available, else a computed fallback (grid sits in the side strip opposite the
+-- start menu). Returns left_x, oy.
+function M.launcherGridAnchor(width, height, side)
+    width  = width or Screen:getWidth()
+    height = height or Screen:getHeight()
+    local g = M.gridMetrics()
+    local rect = _remembered_grid
+    if rect then
+        local cx = rect.x + math.floor(rect.w / 2)
+        local oy = rect.y + M.focusBorder() + math.floor((g.art - g.H) / 2)
+        return cx - math.floor(g.W / 2), oy
+    end
+    -- Fallback: centre in the side strip on `side`, in the flush-bottom band.
+    local _PAD, _cw, footer_h = M.primitives(width)
+    local side_strip = M.sideStripW(width)
+    local cx = (side == "right") and (width - math.floor(side_strip / 2))
+               or math.floor(side_strip / 2)
+    local hit = M.hitExtension()
+    local frame_top = (height - footer_h) + math.floor((footer_h - (g.art + hit)) / 2)
+    local oy = frame_top + math.floor((g.art - g.H) / 2)
+    return cx - math.floor(g.W / 2), oy
+end
+
 -- Where to paint the bars and centre the tap target: from the remembered button
 -- frame when available (exact), else the computed fallback. Returns the bars'
 -- centre x and top y.

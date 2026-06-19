@@ -1,17 +1,16 @@
 --[[
-Persistent Bookshelf launcher button for the reader view.
+Persistent Bookshelf launcher buttons for the reader view: the start-menu
+hamburger and (when micro-modules are enabled) the micro-module grid button.
 
 Registered with ReaderView via view:registerViewModule (the Bookends overlay
-mechanism), so its paintTo runs as part of every ReaderView paint pass -- drawn
-INTO the reader frame, surviving page turns / refreshes rather than floating on
-the window stack where an e-ink refresh would ghost it. main.lua registers a
-touch zone over the button that opens the start menu.
+mechanism), so paintTo runs as part of every ReaderView paint pass -- drawn INTO
+the reader frame, surviving page turns / refreshes. main.lua registers a touch
+zone over each button.
 
-Position + bar design come from lib/bookshelf_footer_geom, the single source the
-home-screen footer button also uses -- so the launcher is pixel-identical and
-tracks any change to the footer button. When the bookshelf has been shown this
-session, footer_geom hands back the REAL painted rect; otherwise a computed
-fallback.
+Position + glyph design come from lib/bookshelf_footer_geom -- the single source
+the home-screen footer buttons also use -- so the launchers are pixel-identical
+and track any footer change (the real painted rects are remembered when the
+bookshelf is shown; otherwise a computed fallback).
 ]]
 local Blitbuffer = require("ffi/blitbuffer")
 local Device     = require("device")
@@ -21,11 +20,14 @@ local Widget     = require("ui/widget/widget")
 local Screen     = Device.screen
 
 local ReaderButtons = Widget:extend{
-    side = "left",  -- "left" | "right" (from start_menu_position)
+    side      = "left",   -- hamburger side (start_menu_position)
+    grid_side = "right",  -- grid side (opposite the hamburger)
+    show_grid = false,    -- draw the micro-module grid button too
 }
 
 function ReaderButtons:paintTo(_bb, _x, _y)
     local sw, sh = Screen:getWidth(), Screen:getHeight()
+    -- Hamburger (start menu).
     local cx, top = FooterGeom.launcherBarsAnchor(sw, sh, self.side)
     local m = FooterGeom.barMetrics()
     local left = cx - math.floor(m.bar_w / 2)
@@ -33,20 +35,34 @@ function ReaderButtons:paintTo(_bb, _x, _y)
         _bb:paintRect(left, top + i * (m.bar_t + m.gap), m.bar_w, m.bar_t,
             Blitbuffer.COLOR_BLACK)
     end
-    self.dimen = Geom:new{ x = left, y = top, w = m.bar_w, h = m.span }
+    -- Grid (micro-modules), opposite corner, when enabled.
+    if self.show_grid then
+        local gx, goy = FooterGeom.launcherGridAnchor(sw, sh, self.grid_side)
+        FooterGeom.paintGrid(_bb, gx, goy)
+    end
+    self.dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh }
 end
 
--- Touch target: a comfortable box around the bars (NOT the full footer button
--- width -- in the reader that would swallow the bottom corner's page-turn taps).
+-- Comfortable tap box around the hamburger bars (NOT the full footer-button
+-- width, which would swallow the corner's page-turn taps).
 function ReaderButtons.tapRect(side)
     local sw, sh = Screen:getWidth(), Screen:getHeight()
     local cx, top = FooterGeom.launcherBarsAnchor(sw, sh, side)
     local m = FooterGeom.barMetrics()
     local pad = Screen:scaleBySize(10)
-    local w = m.bar_w + 2 * pad
-    local h = m.span + 2 * pad
-    return Geom:new{ x = math.max(0, cx - math.floor(w / 2)),
-                     y = math.max(0, top - pad), w = w, h = h }
+    return Geom:new{ x = math.max(0, cx - math.floor(m.bar_w / 2) - pad),
+                     y = math.max(0, top - pad),
+                     w = m.bar_w + 2 * pad, h = m.span + 2 * pad }
+end
+
+-- Comfortable tap box around the grid glyph.
+function ReaderButtons.gridTapRect(grid_side)
+    local sw, sh = Screen:getWidth(), Screen:getHeight()
+    local gx, goy = FooterGeom.launcherGridAnchor(sw, sh, grid_side)
+    local g = FooterGeom.gridMetrics()
+    local pad = Screen:scaleBySize(10)
+    return Geom:new{ x = math.max(0, gx - pad), y = math.max(0, goy - pad),
+                     w = g.W + 2 * pad, h = g.H + 2 * pad }
 end
 
 return ReaderButtons

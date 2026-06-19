@@ -984,40 +984,74 @@ function Bookshelf:_setupReaderButtons()
     if not BookshelfSettings.read("reader_launcher_button", false) then return end
     local ok, ReaderButtons = pcall(require, "lib/bookshelf_reader_buttons")
     if not ok or not ReaderButtons then return end
-    -- Match the home-screen hamburger's side (start_menu_position; "off" -> left).
+    -- Match the home-screen footer: hamburger on start_menu_position's side, the
+    -- grid button opposite (only when micro-modules are placed somewhere).
     local side = BookshelfSettings.read("start_menu_position", "left")
     if side ~= "right" then side = "left" end
-    self._reader_buttons = ReaderButtons:new{ side = side }
+    local grid_side = (side == "left") and "right" or "left"
+    local show_grid = BookshelfSettings.microPlacement() ~= "off"
+    self._reader_buttons = ReaderButtons:new{
+        side = side, grid_side = grid_side, show_grid = show_grid }
     self.ui.view:registerViewModule("bookshelf_launcher", self._reader_buttons)
     local Screen = Device.screen
-    local g = ReaderButtons.tapRect(side)
     local sw, sh = Screen:getWidth(), Screen:getHeight()
-    -- Touch zone over the button rect (same geom as the paint). overrides take
-    -- it ahead of the page-turn / footer taps in that small corner only.
-    self.ui:registerTouchZones({
-        {
-            id = "bookshelf_launcher_tap",
-            ges = "tap",
-            screen_zone = {
-                ratio_x = g.x / sw, ratio_y = g.y / sh,
-                ratio_w = g.w / sw, ratio_h = g.h / sh,
-            },
-            handler = function(_ges)
-                logger.dbg("[bookshelf] reader launcher tapped")
-                self:_openReaderStartMenu()
-                return true
-            end,
-            -- Override every zone that could otherwise claim a bottom-corner tap
-            -- first (page turn, the page-body highlight tap, the footer/menu
-            -- taps). Only affects the small button rect; those zones work
-            -- normally everywhere else.
-            overrides = {
-                "tap_forward", "tap_backward",
-                "readerhighlight_tap", "readerhighlight_tap_select_mode",
-                "readerfooter_tap", "readermenu_tap",
-            },
-        },
-    })
+    -- overrides take our small corner zones ahead of the page-turn / highlight /
+    -- footer taps; those zones work normally everywhere outside the button.
+    local OV = {
+        "tap_forward", "tap_backward",
+        "readerhighlight_tap", "readerhighlight_tap_select_mode",
+        "readerfooter_tap", "readermenu_tap",
+    }
+    local function zone(id, rect, handler)
+        return {
+            id = id, ges = "tap",
+            screen_zone = { ratio_x = rect.x / sw, ratio_y = rect.y / sh,
+                            ratio_w = rect.w / sw, ratio_h = rect.h / sh },
+            handler = function(_ges) handler(); return true end,
+            overrides = OV,
+        }
+    end
+    local zones = {
+        zone("bookshelf_launcher_tap", ReaderButtons.tapRect(side),
+            function() self:_openReaderStartMenu() end),
+    }
+    if show_grid then
+        zones[#zones + 1] = zone("bookshelf_grid_tap",
+            ReaderButtons.gridTapRect(grid_side),
+            function() self:_openReaderMicroModules() end)
+    end
+    self.ui:registerTouchZones(zones)
+end
+
+-- Open the full-screen micro-module overlay from the reader (v1). No bookshelf
+-- widget exists here, so a minimal context shim stands in for `bw`: enough for
+-- the overlay to render + navigate the grid, position its close-X / hamburger,
+-- and open the start menu. No status line (no _currentHeroBook /
+-- _buildDeviceState), and widget-dependent module taps no-op (HeroModules._tap
+-- pcalls on_tap). pcall'd so a context gap can't crash the reader.
+function Bookshelf:_openReaderMicroModules()
+    local ok, Mod = pcall(require, "lib/bookshelf_micro_fullscreen")
+    if not ok or not Mod then return end
+    local Screen     = require("device").screen
+    local FooterGeom = require("lib/bookshelf_footer_geom")
+    local ReaderButtons = require("lib/bookshelf_reader_buttons")
+    local outer = self
+    local side = BookshelfSettings.read("start_menu_position", "left")
+    if side ~= "right" then side = "left" end
+    local grid_side = (side == "left") and "right" or "left"
+    local shim = {
+        FOOTER_HIT_EXTENSION = FooterGeom.hitExtension(),
+        FOOTER_STROKE_W      = FooterGeom.barMetrics().bar_t,
+        _hero_cells          = {},
+        _micromod_dimen      = ReaderButtons.gridTapRect(grid_side),
+        _burger_dimen        = ReaderButtons.tapRect(side),
+        _startMenuPosition   = function()
+            local p = BookshelfSettings.read("start_menu_position", "left")
+            return (p == "right" or p == "off") and p or "left"
+        end,
+        _openStartMenu = function() outer:_openReaderStartMenu() end,
+    }
+    pcall(function() Mod.open(shim, shim._micromod_dimen, Screen:scaleBySize(48)) end)
 end
 
 -- Open the start menu from the reader. No bookshelf widget exists here, but
