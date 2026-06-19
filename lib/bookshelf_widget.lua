@@ -10835,7 +10835,8 @@ function BookshelfWidget:_openStartMenu()
         logger.warn("[bookshelf] start menu unavailable:", tostring(StartMenu))
         return
     end
-    StartMenu.open(self, self._footer_h_last or Screen:scaleBySize(40), self._burger_dimen)
+    StartMenu.open(self, self._footer_h_last or Screen:scaleBySize(40),
+        self._burger_dimen, "library")
 end
 
 -- Open the full-screen micro-module grid (Micro-modules placement ==

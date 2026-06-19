@@ -1031,7 +1031,7 @@ function Bookshelf:_openReaderStartMenu()
     local side = BookshelfSettings.read("start_menu_position", "left")
     if side ~= "right" then side = "left" end
     local g = require("lib/bookshelf_reader_buttons").tapRect(side)
-    pcall(function() StartMenu.open(nil, Screen:scaleBySize(48), g) end)
+    pcall(function() StartMenu.open(nil, Screen:scaleBySize(48), g, "reader") end)
 end
 
 -- re-wrap this same callback when the reader is shown — AFTER our init-time

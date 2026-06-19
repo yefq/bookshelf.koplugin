@@ -130,11 +130,14 @@ local StartMenu = InputContainer:extend{}
 -- Entry point used by bookshelf_widget. bottom_inset = footer height (+margin).
 -- burger_dimen: live Geom of the hamburger InputContainer (optional); when
 -- provided the overlay paints an opaque close glyph over that region.
-function StartMenu.open(bw, bottom_inset, burger_dimen)
+-- context: "library" (home screen, default) | "reader" (in-reader launcher).
+-- Items whose scope is set to the other context are filtered out (#scope feat).
+function StartMenu.open(bw, bottom_inset, burger_dimen, context)
     local menu = StartMenu:new{
         bw           = bw,
         bottom_inset = bottom_inset + Screen:scaleBySize(6),
         burger_dimen = burger_dimen,
+        context      = (context == "reader") and "reader" or "library",
     }
     UIManager:show(menu, "ui", menu._dirty_region)
     StartMenu._live = menu -- test/introspection hook; cleared in onCloseWidget
@@ -148,6 +151,9 @@ function StartMenu:_loadItems()
     if Store.microPlacement() == "off" then
         items = stripModules(items)
     end
+    -- Hide entries scoped to the other context (library vs the in-reader
+    -- launcher). nil scope shows in both, so default menus are unaffected.
+    items = Model.filterByScope(items, self.context or "library")
     return items
 end
 
