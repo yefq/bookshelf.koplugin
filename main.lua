@@ -54,14 +54,17 @@ local Bookshelf = WidgetContainer:extend{
 -- Canonical order of the plugin's main-menu entries. Consumed by the
 -- KOMenu order hook below AND by the start menu's "Bookshelf menu"
 -- action, which probes addToMainMenu and hosts these in this order.
+-- Display order, banded with separators (set on the last item of each band in
+-- addToMainMenu): actions (Open, Selection) | customise (Edit, Chips,
+-- Collections) | configure (Hardcover, Settings) | meta (Updates, About).
 Bookshelf.MENU_ORDER = {
     "bookshelf_toggle",
+    "bookshelf_selection_mode",
     "bookshelf_hero_card",
     "bookshelf_shelf_tabs",
     "bookshelf_collections",
     "bookshelf_hardcover",
     "bookshelf_settings",
-    "bookshelf_selection_mode",
     "bookshelf_updates",
     "bookshelf_about",
 }
@@ -543,7 +546,6 @@ function Bookshelf:addToMainMenu(menu_items)
             -- Always close the menu so the user lands on the new state.
             _closeTouchMenu(touchmenu_instance)
         end,
-        separator = true,
     }
 
     menu_items.bookshelf_hero_card = {
@@ -609,6 +611,8 @@ function Bookshelf:addToMainMenu(menu_items)
             S._bw = _live_widget
             return S:_settingsSubItems()
         end,
+        -- End the configure band (Hardcover, Settings) before Updates / About.
+        separator = true,
     }
 
     menu_items.bookshelf_selection_mode = {
@@ -628,6 +632,7 @@ function Bookshelf:addToMainMenu(menu_items)
                 _live_widget:onBookshelfToggleSelectionMode()
             end
         end,
+        -- End the actions band (Open, Selection) before the customise entries.
         separator = true,
     }
 
