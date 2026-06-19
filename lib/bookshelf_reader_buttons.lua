@@ -20,20 +20,23 @@ local Widget     = require("ui/widget/widget")
 local Screen     = Device.screen
 
 local ReaderButtons = Widget:extend{
-    side      = "left",   -- hamburger side (start_menu_position)
-    grid_side = "right",  -- grid side (opposite the hamburger)
-    show_grid = false,    -- draw the micro-module grid button too
+    side           = "left",  -- hamburger side (start_menu_position)
+    grid_side      = "right", -- grid side (opposite the hamburger)
+    show_hamburger = true,    -- draw the start-menu hamburger (off when start menu = off)
+    show_grid      = false,   -- draw the micro-module grid button (fullscreen placement only)
 }
 
 function ReaderButtons:paintTo(_bb, _x, _y)
     local sw, sh = Screen:getWidth(), Screen:getHeight()
-    -- Hamburger (start menu).
-    local cx, top = FooterGeom.launcherBarsAnchor(sw, sh, self.side)
-    local m = FooterGeom.barMetrics()
-    local left = cx - math.floor(m.bar_w / 2)
-    for i = 0, 2 do
-        _bb:paintRect(left, top + i * (m.bar_t + m.gap), m.bar_w, m.bar_t,
-            Blitbuffer.COLOR_BLACK)
+    -- Hamburger (start menu), unless the start menu is set to "off".
+    if self.show_hamburger then
+        local cx, top = FooterGeom.launcherBarsAnchor(sw, sh, self.side)
+        local m = FooterGeom.barMetrics()
+        local left = cx - math.floor(m.bar_w / 2)
+        for i = 0, 2 do
+            _bb:paintRect(left, top + i * (m.bar_t + m.gap), m.bar_w, m.bar_t,
+                Blitbuffer.COLOR_BLACK)
+        end
     end
     -- Grid (micro-modules), opposite corner, when enabled.
     if self.show_grid then

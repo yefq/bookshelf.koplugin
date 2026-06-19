@@ -984,14 +984,21 @@ function Bookshelf:_setupReaderButtons()
     if not BookshelfSettings.read("reader_launcher_button", false) then return end
     local ok, ReaderButtons = pcall(require, "lib/bookshelf_reader_buttons")
     if not ok or not ReaderButtons then return end
-    -- Match the home-screen footer: hamburger on start_menu_position's side, the
-    -- grid button opposite (only when micro-modules are placed somewhere).
-    local side = BookshelfSettings.read("start_menu_position", "left")
-    if side ~= "right" then side = "left" end
-    local grid_side = (side == "left") and "right" or "left"
-    local show_grid = BookshelfSettings.microPlacement() ~= "off"
+    -- Mirror the home-screen footer's own gating so the reader matches it:
+    --   * hamburger only when start_menu_position ~= "off", on that side;
+    --   * grid button only in "fullscreen" placement (the one case the footer
+    --     shows a grid button), on the corner opposite the start menu (default
+    --     right when the start menu is off).
+    local menu_pos = BookshelfSettings.read("start_menu_position", "left")
+    local show_hamburger = menu_pos ~= "off"
+    local side = (menu_pos == "right") and "right" or "left"
+    local show_grid = BookshelfSettings.microPlacement() == "fullscreen"
+    local grid_side = (menu_pos == "left") and "right"
+        or ((menu_pos == "right") and "left" or "right")
+    if not (show_hamburger or show_grid) then return end -- nothing to show
     self._reader_buttons = ReaderButtons:new{
-        side = side, grid_side = grid_side, show_grid = show_grid }
+        side = side, grid_side = grid_side,
+        show_hamburger = show_hamburger, show_grid = show_grid }
     self.ui.view:registerViewModule("bookshelf_launcher", self._reader_buttons)
     local Screen = Device.screen
     local sw, sh = Screen:getWidth(), Screen:getHeight()
@@ -1011,10 +1018,11 @@ function Bookshelf:_setupReaderButtons()
             overrides = OV,
         }
     end
-    local zones = {
-        zone("bookshelf_launcher_tap", ReaderButtons.tapRect(side),
-            function() self:_openReaderStartMenu() end),
-    }
+    local zones = {}
+    if show_hamburger then
+        zones[#zones + 1] = zone("bookshelf_launcher_tap", ReaderButtons.tapRect(side),
+            function() self:_openReaderStartMenu() end)
+    end
     if show_grid then
         zones[#zones + 1] = zone("bookshelf_grid_tap",
             ReaderButtons.gridTapRect(grid_side),
