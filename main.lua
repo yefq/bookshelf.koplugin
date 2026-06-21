@@ -1117,12 +1117,27 @@ function Bookshelf:_openReaderStartMenu()
     local Screen = require("device").screen
     local side = BookshelfSettings.read("start_menu_position", "left")
     if side ~= "right" then side = "left" end
-    -- Real footer hamburger frame (remembered from shelf mode) so the start
-    -- menu's close-X lands where it does on the home screen; tap-rect fallback
-    -- before the bookshelf has been shown this session.
-    local g = require("lib/bookshelf_footer_geom").rememberedButtonRect(side)
-              or require("lib/bookshelf_reader_buttons").tapRect(side)
-    pcall(function() StartMenu.open(nil, Screen:scaleBySize(48), g, "reader") end)
+    -- Is the persistent launcher hamburger actually on screen? (same gate as
+    -- _setupReaderButtons: the reader button must be enabled AND the start menu
+    -- not set to off.)
+    local button_showing =
+        BookshelfSettings.read("reader_launcher_button", false) == true
+        and BookshelfSettings.read("start_menu_position", "left") ~= "off"
+    if button_showing then
+        -- A hamburger is visible to morph into the close-X; pass its real frame
+        -- (remembered from shelf mode) so the X lands on it, and keep the inset
+        -- that clears the footer band.
+        local g = require("lib/bookshelf_footer_geom").rememberedButtonRect(side)
+                  or require("lib/bookshelf_reader_buttons").tapRect(side)
+        pcall(function() StartMenu.open(nil, Screen:scaleBySize(48), g, "reader") end)
+    else
+        -- Gesture-opened with no visible button: nil burger_dimen => StartMenu
+        -- skips the close-X box entirely (nothing white collides with the reader
+        -- page / bookends bars) AND balances the bottom margin to its side margin
+        -- (the passed inset is ignored in that case). Closes via tap-outside or
+        -- Back as usual.
+        pcall(function() StartMenu.open(nil, 0, nil, "reader") end)
+    end
 end
 
 -- re-wrap this same callback when the reader is shown — AFTER our init-time
