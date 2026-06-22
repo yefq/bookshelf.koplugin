@@ -692,7 +692,7 @@ msgstr "Magasság: "
 
 #: lib/bookshelf_hero_line_editor.lua:428
 msgid "Tokens…"
-msgstr "Jelölők…"
+msgstr "Tokenek…"
 
 #: lib/bookshelf_hero_line_editor.lua:438
 msgid "Icons…"
@@ -1575,6 +1575,10 @@ msgstr "Alapértelmezett színek visszaállítása"
 msgid "Cover badge size"
 msgstr "Borító jelvény mérete"
 
+#: lib/bookshelf_settings.lua:1355 lib/bookshelf_settings.lua:2787
+msgid "Edit shelf size"
+msgstr ""
+
 #: lib/bookshelf_settings.lua:1356
 msgid ""
 "Open a small overlay that lets you set the number of columns and rows of "
@@ -1604,6 +1608,10 @@ msgid ""
 "swaps the hero card for the grid; Full-screen button adds a footer button "
 "opening a full-screen grid. The hero and full-screen surfaces keep their own "
 "module lists. Turn all three off to disable micro-modules entirely."
+msgstr ""
+
+#: lib/bookshelf_settings.lua:1436
+msgid "In start menu"
 msgstr ""
 
 #: lib/bookshelf_settings.lua:1437
@@ -1680,13 +1688,15 @@ msgstr ""
 
 #: lib/bookshelf_settings.lua:1603
 msgid "Show launcher button while reading"
-msgstr ""
+msgstr "Indítógomb megjelenítése olvasás közben"
 
 #: lib/bookshelf_settings.lua:1604
 msgid ""
 "Adds a small Bookshelf button to the bottom corner of the reader that opens "
 "the start menu. Takes effect the next time you open a book."
 msgstr ""
+"Egy kis Bookshelf gombot jelenít meg az olvasó alsó sarkában, amely "
+"megnyitja a kezdőmenüt. A következő könyv megnyitásakor lép érvénybe."
 
 #: lib/bookshelf_settings.lua:1622
 msgid "Advanced settings"
@@ -2550,6 +2560,14 @@ msgstr ""
 msgid "Library only"
 msgstr ""
 
+#: lib/bookshelf_start_menu_edit.lua:271
+msgid "Reader only"
+msgstr ""
+
+#: lib/bookshelf_start_menu_edit.lua:283 lib/bookshelf_start_menu_edit.lua:303
+msgid "Show in"
+msgstr ""
+
 #: lib/bookshelf_start_menu_edit.lua:324
 msgid "Delete this folder and everything in it?"
 msgstr "Törlöd ezt a mappát és minden tartalmát?"
@@ -3054,6 +3072,10 @@ msgstr "Micromodule-ok"
 msgid "Reset modules to default"
 msgstr "Modulok visszaállítása alapértelmezettre"
 
+#: lib/bookshelf_widget.lua:7212
+msgid "Remove micro-modules from hero (re-enable in settings)"
+msgstr ""
+
 #: lib/bookshelf_widget.lua:7479
 msgid "Refreshing library…"
 msgstr "Könyvtár frissítése…"
@@ -3475,6 +3497,14 @@ msgstr "Bookshelf: fókuszban lévő halom hozzáadása a kijelöléshez"
 msgid "Bookshelf: open bulk action menu"
 msgstr "Bookshelf: tömeges műveletek menü megnyitása"
 
+#: main.lua:862
+msgid "Bookshelf: open start menu"
+msgstr ""
+
+#: main.lua:868
+msgid "Bookshelf: open micro-modules"
+msgstr ""
+
 #: main.lua:954
 msgid "Closing book…"
 msgstr "Könyv bezárása…"
@@ -3571,17 +3601,25 @@ msgstr "12 órás"
 msgid "24-hour"
 msgstr "24 órás"
 
+#: micromodules/countdown.lua:44
+msgid "Countdown date"
+msgstr ""
+
 #: micromodules/countdown.lua:56
 msgid "Countdown label"
-msgstr ""
+msgstr "Visszaszámlálás felirata"
 
 #: micromodules/countdown.lua:58
 msgid "e.g. Holiday"
-msgstr ""
+msgstr "pl. Nyaralás"
 
 #: micromodules/countdown.lua:66 micromodules/countdown.lua:76
 #: micromodules/countdown.lua:83 micromodules/countdown.lua:132
 msgid "Countdown"
+msgstr "Visszaszámlálás"
+
+#: micromodules/countdown.lua:77
+msgid "From a date you set. Works offline."
 msgstr ""
 
 #: micromodules/countdown.lua:88 micromodules/countdown.lua:105
@@ -3592,6 +3630,14 @@ msgstr "nap"
 
 #: micromodules/countdown.lua:88
 msgid "until …"
+msgstr "eddig: …"
+
+#: micromodules/countdown.lua:94
+msgid "Set a date"
+msgstr ""
+
+#: micromodules/countdown.lua:102
+msgid "Today"
 msgstr ""
 
 #: micromodules/countdown.lua:105 micromodules/reading_streak.lua:293
@@ -3601,14 +3647,26 @@ msgstr "nap"
 
 #: micromodules/countdown.lua:107
 msgid "until %1"
-msgstr ""
+msgstr "eddig: %1"
 
 #: micromodules/countdown.lua:108
 msgid "since %1"
-msgstr ""
+msgstr "%1 óta"
 
 #: micromodules/countdown.lua:115
 msgid "Next"
+msgstr "Tovább"
+
+#: micromodules/countdown.lua:134
+msgid "Change date…"
+msgstr ""
+
+#: micromodules/countdown.lua:135
+msgid "Set date"
+msgstr ""
+
+#: micromodules/countdown.lua:138
+msgid "Change label…"
 msgstr ""
 
 #: micromodules/daily_fun.lua:157
@@ -4313,6 +4371,20 @@ msgstr "Frissítve: %1 perccel ezelőtt"
 #: micromodules/weather.lua:473 micromodules/weather.lua:559
 msgid "Updated %1h ago"
 msgstr "Frissítve: %1 órával ezelőtt"
+
+#~ msgid ""
+#~ "Where the micro-module grid appears. In hero area: a chip swaps the hero "
+#~ "card for the grid. Full-screen button: a grid button in the footer corner "
+#~ "opens a full-screen grid. Off: removes micro-modules everywhere. Your "
+#~ "module configuration is kept."
+#~ msgstr ""
+#~ "Hol jelenjen meg a mikromodul-rács. Főterületen: egy chip felváltja a "
+#~ "főkártyát a ráccsal. Teljes képernyős gomb: a lábléc sarkában lévő "
+#~ "rácsgomb teljes képernyős rácsot nyit. Ki: eltávolítja a mikromodulokat "
+#~ "mindenhonnan. A modulkonfiguráció megmarad."
+
+#~ msgid "Disable micro-modules (re-enable from settings)"
+#~ msgstr "Micromodule-ok letiltása (újra engedélyezhető a beállításokban)"
 
 #~ msgid "Edit shelf layout"
 #~ msgstr "Polc elrendezésének szerkesztése"
