@@ -8989,6 +8989,58 @@ function BookshelfWidget:_openHardcoverMenu(book)
     UIManager:show(dialog)
 end
 
+-- Button rows contributed by other plugins through KOReader's standard
+-- long-press file-dialog hook (FileManager:addFileDialogButtons), so they appear
+-- in bookshelf's book menu exactly as they would in the stock file browser
+-- (issue #102). Returns a list of ButtonDialog rows, or nil when none apply.
+--
+-- Each row builder is called as it would be by FileManager:showFileDialog --
+-- row_func(file, is_file=true, book_props) -- and pcall-guarded so a broken or
+-- FM-context-assuming plugin button can never break bookshelf's menu. book_props
+-- is built best-effort in KOReader's shape (via coverbrowser when present) so
+-- metadata-dependent buttons render; metadata-independent ones (e.g. Incognito)
+-- ignore it.
+function BookshelfWidget:_fileDialogPluginRows(file)
+    if not file then return nil end
+    local ok_fm, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if not ok_fm or not FileManager then return nil end
+    local fm = FileManager.instance
+    -- Instance first (plugins may register per-instance); fall back to the class
+    -- field (incognito registers on the class, also reachable via the instance).
+    local added = (fm and fm.file_dialog_added_buttons)
+        or FileManager.file_dialog_added_buttons
+    if type(added) ~= "table" or #added == 0 then return nil end
+
+    -- Reverse the id->position index so we can skip whole registrations by id.
+    -- coverbrowser is bookshelf's BIM provider; its long-press buttons (Ignore
+    -- cover / Ignore metadata / Refresh cached book information) are redundant
+    -- here -- bookshelf already integrates that metadata and has its own
+    -- "Refresh metadata". Everything else still passes through generically.
+    local id_at = {}
+    if type(added.index) == "table" then
+        for id, pos in pairs(added.index) do id_at[pos] = id end
+    end
+
+    local book_props
+    pcall(function()
+        if fm and fm.coverbrowser and fm.coverbrowser.getBookInfo then
+            book_props = fm.coverbrowser:getBookInfo(file)
+        end
+    end)
+
+    local rows = {}
+    for _i = 1, #added do
+        local id = id_at[_i]
+        if not (type(id) == "string" and id:find("^coverbrowser")) then
+            local ok, row = pcall(added[_i], file, true, book_props)
+            if ok and type(row) == "table" and #row > 0 then
+                rows[#rows + 1] = row
+            end
+        end
+    end
+    return (#rows > 0) and rows or nil
+end
+
 -- (from on_series_hold on a SeriesStack). Series groups have a .books field;
 -- we route to a series-specific dialog in that case.
 function BookshelfWidget:_openBookMenu(item)
@@ -9882,6 +9934,16 @@ function BookshelfWidget:_openBookMenu(item)
     buttons[#buttons + 1] = { reset_btn, remove_history_button, fav_button }
     buttons[#buttons + 1] = { delete_btn, refresh_button }
     buttons[#buttons + 1] = { select_btn, cancel_btn, apply_btn }
+
+    -- Buttons contributed by other plugins via KOReader's standard long-press
+    -- hook (FileManager:addFileDialogButtons) -- e.g. Incognito's "Open
+    -- Incognito" (issue #102). Appended below a separator so bookshelf's own
+    -- actions stay primary. Generic: any plugin using the hook shows up here.
+    local plugin_rows = self:_fileDialogPluginRows(book.filepath)
+    if plugin_rows then
+        buttons[#buttons + 1] = {} -- separator
+        for _i = 1, #plugin_rows do buttons[#buttons + 1] = plugin_rows[_i] end
+    end
 
     -- Inset the header by the shelf's inter-column book gap, and ONLY that:
     -- override ButtonDialog's default title_padding (Size.padding.large) so
