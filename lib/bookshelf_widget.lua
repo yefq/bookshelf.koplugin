@@ -1309,6 +1309,7 @@ function BookshelfWidget:_rebuild()
     local chips = not hide_chip_bar and ChipBar:new{
         chips             = active_chips,
         active            = self.chip,
+        selected_key      = self.chip,   -- seeds the chip page (infinite-chips)
         focused_key       = self._chip_cursor_key,
         width             = content_w,
         height            = chip_h,
