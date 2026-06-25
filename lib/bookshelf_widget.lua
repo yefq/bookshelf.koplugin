@@ -1309,6 +1309,7 @@ function BookshelfWidget:_rebuild()
     local chips = not hide_chip_bar and ChipBar:new{
         chips             = active_chips,
         active            = self.chip,
+        selected_key      = self.chip,   -- seeds the chip page (infinite-chips)
         focused_key       = self._chip_cursor_key,
         width             = content_w,
         height            = chip_h,
@@ -1320,6 +1321,8 @@ function BookshelfWidget:_rebuild()
         -- its tap-feedback can flag a repaint. UIManager:setDirty only
         -- accepts widgets registered with UIManager:show.
         show_parent       = self,
+        -- Page changed (swipe/chevron): warm the chips the new page reveals.
+        on_page_change = function() self:_queueWarmForVisible() end,
         on_change = function(key)
             -- Search "chip" is an action, not a navigable tab — open
             -- the search dialog and bail before switching self.chip.
@@ -5060,10 +5063,10 @@ function BookshelfWidget:_stopStatusTimer()
     -- and teardown both route through here, so the deferred decode never
     -- fires against a backgrounded / torn-down widget.
     self:_cancelPreload()
-    -- Chip preload is the one-shot background task; cancel its in-flight
-    -- chunks too. _chip_preload_done is intentionally NOT reset -- if the
-    -- pre-warm got far enough before being cancelled, those covers stay
-    -- cached and we don't want to re-do the work.
+    -- Chip preload is a background task; cancel its in-flight chunks too.
+    -- _warmed_chip_keys is intentionally NOT reset -- if the pre-warm got far
+    -- enough before being cancelled, those covers stay cached and we don't
+    -- want to re-warm them when the widget comes back.
     self:_cancelChipPreload()
     -- File-poll: stop probing the filesystem while bookshelf isn't visible
     -- (reader has the foreground / widget torn down). Restarts on the next
@@ -6841,39 +6844,20 @@ function BookshelfWidget:_chipPreloadStep()
         UIManager:scheduleIn(CHIP_PRELOAD_YIELD_S, self._chip_preload_fn)
         return
     end
-    if not self._chip_preload_queue then
-        -- First tick: snapshot the OTHER chips' keys. Each chip's first-page
-        -- fetch is pulled into the queue one-per-tick below -- a cold fetch
-        -- is a full shape build + sort (potentially hundreds of ms on
-        -- device), so batching all chips into this tick would occupy the
-        -- main thread for their sum right after the boot paint.
-        self._chip_preload_counters = { decoded = 0, already = 0, failed = 0 }
-        self._chip_preload_queue = {}
-        self._chip_preload_seen = {}
-        self._chip_preload_keys = {}
-        self._chip_preload_total = 0
-        -- Top level only: _fetchChipItems short-circuits to the drilldown
-        -- branch when a tip is present, so borrowing self.chip mid-drilldown
-        -- would fetch the wrong list.
-        if #(self._drilldown_path or {}) == 0 then
-            for _i, key in ipairs(self._active_chip_keys or {}) do
-                if key ~= self.chip then
-                    self._chip_preload_keys[#self._chip_preload_keys + 1] = key
-                end
-            end
-        end
-    end
-    local q = self._chip_preload_queue
-    local keys = self._chip_preload_keys
+    -- Drain the queue/keys seeded by _queueWarmForVisible (page-bounded). One
+    -- cold chip fetch per tick (a full shape build + sort, potentially hundreds
+    -- of ms on device), then warm its covers in chunks.
+    local q    = self._chip_preload_queue or {}
+    local keys = self._chip_preload_keys  or {}
+    self._chip_preload_queue    = q
+    self._chip_preload_seen     = self._chip_preload_seen or {}
+    self._chip_preload_counters = self._chip_preload_counters or { decoded = 0, already = 0, failed = 0 }
     if #q == 0 and #keys > 0 then
-        -- Pull the next chip's first page into the queue (one fetch per tick).
         local key = table.remove(keys, 1)
         local w, h = self:_currentSlotDims()
         if w then
             local _qb_t0 = _gettime()
-            pcall(self._collectPageCovers, self, q, self._chip_preload_seen,
-                key, 1, w, h)
-            self._chip_preload_total = self._chip_preload_total + #q
+            pcall(self._collectPageCovers, self, q, self._chip_preload_seen, key, 1, w, h)
             logger.dbg(string.format(
                 "[bookshelf perf] preload-chips: fetched %s in %.0fms jobs=%d",
                 tostring(key), (_gettime() - _qb_t0) * 1000, #q))
@@ -6882,19 +6866,9 @@ function BookshelfWidget:_chipPreloadStep()
         _warmChunk(q, PRELOAD_CHUNK, self._chip_preload_counters)
     end
     if #q == 0 and #keys == 0 then
-        if self._chip_preload_total > 0 then
-            local c = self._chip_preload_counters
-            logger.dbg(string.format(
-                "[bookshelf perf] preload-chips: done warmed=%d already=%d failed=%d folders=%d progress=%d total=%d",
-                c.decoded, c.already, c.failed,
-                c.folders or 0, c.progress or 0, self._chip_preload_total))
-        end
-        -- Mark as done so subsequent _rebuilds don't re-trigger.
-        self._chip_preload_done = true
+        -- Idle. NOT permanently done: a page change re-arms the loop via
+        -- _queueWarmForVisible, which only queues chips not already warmed.
         self._chip_preload_fn = nil
-        self._chip_preload_queue = nil
-        self._chip_preload_seen = nil
-        self._chip_preload_keys = nil
         return
     end
     if self._chip_preload_fn then
@@ -6902,26 +6876,50 @@ function BookshelfWidget:_chipPreloadStep()
     end
 end
 
--- One-shot trigger: schedule chip preload if conditions are right and we
--- haven't already done it this session. Idempotent and cheap to call from
--- _rebuild on every invocation; gated internally.
-function BookshelfWidget:_maybeStartChipPreload()
-    if self._chip_preload_done then return end
-    if self._chip_preload_fn then return end  -- already in flight
-    -- Apply the user's cover-cache budget unconditionally -- it governs the
-    -- next/prev PAGE preload too, which is independent of the chip warm-up
-    -- below. (Belt-and-braces: _schedulePreload also applies it, but a
-    -- single-page chip never calls that.)
-    self:_applyCoverCacheBudget()
-    -- The CHIP warm-up only (the per-chip background pre-build) is disablable
-    -- in Advanced settings (default on). It makes chip switches instant, but on
-    -- a large library with many chips it adds several seconds of post-launch
-    -- work; off = chips build lazily on first switch. This does NOT touch the
-    -- predictive next/prev page preload, which stays on regardless.
+-- Nav chip keys worth warming from the current view: the chip bar's current
+-- page plus the next one (so warm cost is O(page), not O(total chips) -- the
+-- point of "infinite chips"). Falls back to every active key if the bar isn't
+-- paginated / not built yet (single-page bars warm everything, as before).
+function BookshelfWidget:_visibleWarmKeys()
+    local cb = self._chip_bar
+    if cb and cb.warmKeys then
+        local ks = cb:warmKeys()
+        if ks and #ks > 0 then return ks end
+    end
+    return self._active_chip_keys or {}
+end
+
+-- Queue any not-yet-warmed chips reachable from the current page and arm the
+-- background warm loop. Idempotent: dedups against _warmed_chip_keys, so it's
+-- safe to call on every rebuild AND on every page change -- each chip warms at
+-- most once per widget instance.
+function BookshelfWidget:_queueWarmForVisible()
     if not BookshelfSettings.nilOrTrue("prewarm_chip_cache") then return end
     if #(self._drilldown_path or {}) ~= 0 then return end
-    self._chip_preload_fn = function() self:_chipPreloadStep() end
-    UIManager:scheduleIn(CHIP_PRELOAD_DELAY_S, self._chip_preload_fn)
+    self._warmed_chip_keys      = self._warmed_chip_keys      or {}
+    self._chip_preload_keys     = self._chip_preload_keys     or {}
+    self._chip_preload_queue    = self._chip_preload_queue    or {}
+    self._chip_preload_seen     = self._chip_preload_seen     or {}
+    self._chip_preload_counters = self._chip_preload_counters or { decoded = 0, already = 0, failed = 0 }
+    for _i, key in ipairs(self:_visibleWarmKeys()) do
+        if key ~= self.chip and not self._warmed_chip_keys[key] then
+            self._warmed_chip_keys[key] = true
+            self._chip_preload_keys[#self._chip_preload_keys + 1] = key
+        end
+    end
+    if (#self._chip_preload_keys > 0 or #self._chip_preload_queue > 0)
+            and not self._chip_preload_fn then
+        self._chip_preload_fn = function() self:_chipPreloadStep() end
+        UIManager:scheduleIn(CHIP_PRELOAD_DELAY_S, self._chip_preload_fn)
+    end
+end
+
+-- Cheap to call from _rebuild on every invocation; gated internally. Applies
+-- the cover-cache budget (governs the next/prev PAGE preload too, regardless of
+-- the chip-warm toggle) then queues the page-bounded chip warm.
+function BookshelfWidget:_maybeStartChipPreload()
+    self:_applyCoverCacheBudget()
+    self:_queueWarmForVisible()
 end
 
 -- ── Periodic file poll ──────────────────────────────────────────────────
@@ -7042,9 +7040,11 @@ function BookshelfWidget:_filePollTick()
             self:_rebuild()
             UIManager:setDirty(self, "ui")
             -- Walk cache was just invalidated for ALL chips, but _rebuild
-            -- only re-walks the active chip. Re-arm the chip preload so
-            -- subsequent taps on other chips don't pay the full walk cost.
-            self._chip_preload_done = false
+            -- only re-walks the active chip. Clear the warmed set + seen so the
+            -- page-bounded pre-warm re-warms the reachable chips with fresh
+            -- data (and subsequent taps don't pay the full walk cost).
+            self._warmed_chip_keys = nil
+            self._chip_preload_seen = nil
             self._chip_preload_queue = nil
             self:_maybeStartChipPreload()
         end)
