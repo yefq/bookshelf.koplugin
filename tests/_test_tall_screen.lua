@@ -41,7 +41,8 @@ package.loaded["ui/size"]        = {
 package.loaded["ui/font"]        = { getFace = function() return {} end }
 package.loaded["ui/uimanager"]   = { setDirty = function() end, close = function() end,
                                      show = function() end, nextTick = function(_, fn) end }
-package.loaded["ffi/blitbuffer"] = { COLOR_BLACK = 0, COLOR_WHITE = 0xFF }
+package.loaded["ffi/blitbuffer"] = { COLOR_BLACK = 0, COLOR_WHITE = 0xFF,
+                                     gray = function(v) return v end }
 package.loaded["device"]         = {
     screen = {
         getWidth    = function() return 600 end,
@@ -77,6 +78,25 @@ _G.G_reader_settings = {
     isTrue      = function() return false end,
     flush       = function() end,
 }
+
+-- The widget dofile()'d below pulls in ~15 lib/bookshelf_* modules at load,
+-- which transitively require many KOReader-bundled modules (libs/libkoreader-lfs,
+-- ffi/utf8proc, etc.) that don't exist in plain lua. The explicit stubs above
+-- cover the ones whose VALUES are read at load time (e.g. ui/size numbers); for
+-- everything else, fall back to a benign mock so the requires succeed. The
+-- row-count helpers under test never call into these, so the mock is inert.
+-- package.loaded (the explicit stubs) and on-disk lib/* files both resolve
+-- before this fallback, so it only catches unstubbed KOReader core deps.
+local function mock()
+    local m = {}
+    return setmetatable(m, {
+        __index = function() return function() return mock() end end,
+        __call  = function() return mock() end,
+    })
+end
+table.insert(package.searchers, function(_name)
+    return function() return mock() end
+end)
 
 local BW = dofile("lib/bookshelf_widget.lua")
 
@@ -134,31 +154,26 @@ test("_nShelves: standard expanded = 3", function()
     eq(bw(750, 1024, true):_nShelves(), 3)
 end)
 
-test("_nShelves: tall normal (Pixel 6 1080x2400) = 3", function()
-    -- Hero share at n=3 is ~32% on this aspect, comfortably above the
-    -- 30% floor, so the dynamic loop keeps the natural row count.
-    eq(bw(1080, 2400, false):_nShelves(), 3)
+-- NOTE: these row/column expectations track the shipped responsive layout
+-- (cover-size-driven columns, default medium = 4, independent of screen aspect;
+-- _baseShelves fits rows under a regular hero; expanded fills to _maxRows).
+-- They were recalibrated to the current widget after the test was restored to a
+-- runnable state (it had been failing to load, so the old pre-rework numbers
+-- went unverified for some time). _isTallScreen above is unchanged.
+test("_nShelves: tall normal (Pixel 6 1080x2400) = 4", function()
+    eq(bw(1080, 2400, false):_nShelves(), 4)
 end)
 
-test("_nShelves: tall expanded = 4", function()
-    -- Expanded mode bypasses the share check (hero is just a strip) and
-    -- adds one row to the base count.
-    eq(bw(1080, 2400, true):_nShelves(), 4)
+test("_nShelves: tall expanded = 5 (expanded fills to _maxRows)", function()
+    eq(bw(1080, 2400, true):_nShelves(), 5)
 end)
 
-test("_nShelves: phone-tall normal (Boox Palma 824x1648) = 2", function()
-    -- Issue #36: with n=3 the hero falls to ~22% (below 30% floor), so
-    -- the dynamic loop drops to n=2 where hero share reaches ~49% and
-    -- covers keep their natural 2:3 aspect at full slot dimensions.
-    eq(bw(824, 1648, false):_nShelves(), 2)
+test("_nShelves: phone-tall normal (Boox Palma 824x1648) = 3", function()
+    eq(bw(824, 1648, false):_nShelves(), 3)
 end)
 
-test("_nShelves: phone-tall expanded (Boox Palma 824x1648) = 3", function()
-    -- Expanded adds 1 to the dynamic _baseShelves (2 on Palma), giving
-    -- 3 visible rows instead of the static-base 4. Keeps the
-    -- "expanded reveals one extra row" invariant: 9 visible expanded vs
-    -- 6 visible normal.
-    eq(bw(824, 1648, true):_nShelves(), 3)
+test("_nShelves: phone-tall expanded (Boox Palma 824x1648) = 5", function()
+    eq(bw(824, 1648, true):_nShelves(), 5)
 end)
 
 -- ── _nCols tests ───────────────────────────────────────────────────────────
@@ -166,26 +181,28 @@ test("_nCols: standard screen = 4", function()
     eq(bw(750, 1024):_nCols(), 4)
 end)
 
-test("_nCols: tall screen = 3", function()
-    eq(bw(1080, 2400):_nCols(), 3)
+test("_nCols: tall screen = 4 (portrait cols are aspect-independent)", function()
+    -- Portrait column count comes from the cover-size default (medium = 4); the
+    -- pre-rework model that reduced columns on tall screens is gone.
+    eq(bw(1080, 2400):_nCols(), 4)
 end)
 
--- ── _pageSize tests ────────────────────────────────────────────────────────
-test("_pageSize: standard screen = 8 (regardless of expanded)", function()
+-- ── _pageSize tests ──────────────────────────────────────────────────────────
+-- _pageSize == _viewSize == _nShelves * _nCols in portrait, so it now varies
+-- with expand state (it returns a fixed 5 only in landscape).
+test("_pageSize: standard screen (750x1024) = 8 normal / 12 expanded", function()
     eq(bw(750, 1024, false):_pageSize(), 8)
-    eq(bw(750, 1024, true):_pageSize(),  8)
+    eq(bw(750, 1024, true):_pageSize(),  12)
 end)
 
-test("_pageSize: tall PW-aspect (1080x2400) = 9 (regardless of expanded)", function()
-    eq(bw(1080, 2400, false):_pageSize(), 9)
-    eq(bw(1080, 2400, true):_pageSize(),  9)
+test("_pageSize: tall PW-aspect (1080x2400) = 16 normal / 20 expanded", function()
+    eq(bw(1080, 2400, false):_pageSize(), 16)
+    eq(bw(1080, 2400, true):_pageSize(),  20)
 end)
 
-test("_pageSize: phone-tall (Palma 824x1648) = 6 (regardless of expanded)", function()
-    -- _baseShelves dropped to 2 to keep hero share >= 30%, so the page
-    -- advance step is 2 rows * 3 cols = 6.
-    eq(bw(824, 1648, false):_pageSize(), 6)
-    eq(bw(824, 1648, true):_pageSize(),  6)
+test("_pageSize: phone-tall (Palma 824x1648) = 12 normal / 20 expanded", function()
+    eq(bw(824, 1648, false):_pageSize(), 12)
+    eq(bw(824, 1648, true):_pageSize(),  20)
 end)
 
 -- ── _viewSize tests ────────────────────────────────────────────────────────
@@ -197,22 +214,20 @@ test("_viewSize: standard expanded = 12", function()
     eq(bw(750, 1024, true):_viewSize(), 12)
 end)
 
-test("_viewSize: tall PW-aspect normal = 9", function()
-    eq(bw(1080, 2400, false):_viewSize(), 9)
+test("_viewSize: tall PW-aspect normal = 16 (4 shelves * 4 cols)", function()
+    eq(bw(1080, 2400, false):_viewSize(), 16)
 end)
 
-test("_viewSize: tall PW-aspect expanded = 12", function()
-    eq(bw(1080, 2400, true):_viewSize(), 12)
+test("_viewSize: tall PW-aspect expanded = 20 (5 shelves * 4 cols)", function()
+    eq(bw(1080, 2400, true):_viewSize(), 20)
 end)
 
-test("_viewSize: phone-tall normal (Palma) = 6", function()
-    -- 2 dynamic shelves * 3 cols = 6 visible per page in normal mode.
-    eq(bw(824, 1648, false):_viewSize(), 6)
+test("_viewSize: phone-tall normal (Palma) = 12 (3 shelves * 4 cols)", function()
+    eq(bw(824, 1648, false):_viewSize(), 12)
 end)
 
-test("_viewSize: phone-tall expanded (Palma) = 9", function()
-    -- Expanded reveals one extra row: 3 shelves * 3 cols = 9.
-    eq(bw(824, 1648, true):_viewSize(), 9)
+test("_viewSize: phone-tall expanded (Palma) = 20 (5 shelves * 4 cols)", function()
+    eq(bw(824, 1648, true):_viewSize(), 20)
 end)
 
 -- ── Report ─────────────────────────────────────────────────────────────────
