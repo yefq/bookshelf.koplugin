@@ -567,11 +567,11 @@ msgstr "Đã tồn tại một bộ sưu tập có tên đó."
 
 #: lib/bookshelf_collection_manager.lua:375
 msgid "Delete collection \""
-msgstr "Xóa bộ sưu tập ""
+msgstr "Xóa bộ sưu tập \""
 
 #: lib/bookshelf_collection_manager.lua:376
 msgid "\"? Books are not deleted, only the tag."
-msgstr ""? Sách không được xóa, chỉ xóa thẻ."
+msgstr "\"? Sách không được xóa, chỉ xóa thẻ."
 
 #: lib/bookshelf_collection_manager.lua:404
 #: lib/bookshelf_collection_manager.lua:415
@@ -580,7 +580,7 @@ msgstr "Gắn vào thanh chip"
 
 #: lib/bookshelf_collection_manager.lua:422
 msgid "Edit collection: "
-msgstr "Chỉnh sửabộ sưu tập: "
+msgstr "Chỉnh sửa bộ sưu tập: "
 
 #: lib/bookshelf_collection_manager.lua:438
 #: lib/bookshelf_collection_manager.lua:488
@@ -1799,15 +1799,15 @@ msgstr "Sơ chế chip cache"
 
 #: lib/bookshelf_settings.lua:2272
 msgid "\"Latest\" walk depth"
-msgstr ""Latest" độ sâu bước đi"
+msgstr "Độ sâu quét của \"Mới nhất\""
 
 #: lib/bookshelf_settings.lua:2277
 msgid "Cover cache"
-msgstr "Bọc cache"
+msgstr "Bộ nhớ đệm bìa sách"
 
 #: lib/bookshelf_settings.lua:2293
 msgid "Clear cover cache"
-msgstr "Xóa bọc cache"
+msgstr "Xóa bộ nhớ đệm bìa sách"
 
 #: lib/bookshelf_settings.lua:2305
 msgid "Cover cache cleared"
@@ -1936,7 +1936,7 @@ msgstr "Chọn thư mục thư viện ảnh"
 
 #: lib/bookshelf_settings.lua:3246
 msgid "\"Latest\" folder walk depth"
-msgstr ""Latest" độ sâu thư mục"
+msgstr "Độ sâu quét thư mục \"Mới nhất\""
 
 #: lib/bookshelf_settings.lua:3263
 msgid "MB"
